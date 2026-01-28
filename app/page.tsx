@@ -1,8 +1,23 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Coords = { lat: number; lon: number };
+type Prediction = { placeId: string; description: string };
+
+function verdictStyles(verdict?: string) {
+  if (verdict === "GREEN") return { dot: "🟢", pill: "bg-emerald-600", ring: "ring-emerald-200" };
+  if (verdict === "YELLOW") return { dot: "🟡", pill: "bg-amber-500", ring: "ring-amber-200" };
+  return { dot: "🔴", pill: "bg-rose-600", ring: "ring-rose-200" };
+}
+
+function Chip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/80">
+      {children}
+    </span>
+  );
+}
 
 export default function HomePage() {
   const [coords, setCoords] = useState<Coords | null>(null);
@@ -13,13 +28,149 @@ export default function HomePage() {
   const [courses, setCourses] = useState<any>(null);
   const [simulators, setSimulators] = useState<any>(null);
 
+  // City search
+  const [cityQuery, setCityQuery] = useState("");
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [searching, setSearching] = useState(false);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  // Selected day (0..4)
+  const [selectedDay, setSelectedDay] = useState<number>(0);
+
+  // Optional tee time ("HH:MM")
+  const [teeTime, setTeeTime] = useState<string>("");
+
+  const selectedDaily = useMemo(() => weather?.daily?.[selectedDay] ?? null, [weather, selectedDay]);
+
+  const teeTimeResult = useMemo(() => {
+    if (!teeTime || !selectedDaily?.blocks) return null;
+
+    const [hh, mm] = teeTime.split(":").map((n) => Number(n));
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+
+    const targetMinutes = hh * 60 + mm;
+    const blocks = selectedDaily.blocks as any[];
+
+    let best: any = null;
+    let bestDelta = Infinity;
+
+    for (const b of blocks) {
+      const d = new Date(b.dt * 1000);
+      const m = d.getHours() * 60 + d.getMinutes(); // browser local time
+      const delta = Math.abs(m - targetMinutes);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = b;
+      }
+    }
+
+    if (!best) return null;
+
+    return {
+      ...best,
+      deltaMinutes: bestDelta,
+    };
+  }, [teeTime, selectedDaily]);
+
+  const showVerdict =
+    teeTimeResult?.verdict ?? selectedDaily?.golf?.verdict ?? weather?.golf?.verdict ?? null;
+
   const verdictLabel = useMemo(() => {
-    const v = weather?.golf?.verdict;
+    const v = showVerdict;
     if (!v) return null;
-    if (v === "GREEN") return "✅ Green light";
-    if (v === "YELLOW") return "🟡 Playable";
-    return "🔴 Not great";
-  }, [weather]);
+    if (v === "GREEN") return "Green light";
+    if (v === "YELLOW") return "Playable";
+    return "Not golfable";
+  }, [showVerdict]);
+
+  const bestWindowText = useMemo(() => {
+    const bw = selectedDaily?.bestWindow ?? weather?.bestTime?.bestWindow;
+    if (!bw?.startLabel || !bw?.endLabel) return null;
+    return `${bw.startLabel} – ${bw.endLabel} (avg ${bw.avgScore}/100)`;
+  }, [selectedDaily, weather]);
+
+  const showScore = teeTimeResult?.score ?? selectedDaily?.golf?.score ?? weather?.golf?.score;
+  const showReason = teeTimeResult?.reason ?? selectedDaily?.golf?.reason ?? weather?.golf?.reason;
+
+  const style = verdictStyles(showVerdict || "RED");
+
+  // ✅ One-line confidence sentence
+  const confidenceLine = useMemo(() => {
+    const v = showVerdict;
+    if (v === "GREEN") return "Book it with confidence.";
+    if (v === "YELLOW") return "Playable if you catch the window.";
+    if (v === "RED") return "Courses are likely closed or unpleasant.";
+    return null;
+  }, [showVerdict]);
+
+  // ✅ 2–3 reason chips when RED (derived from current/selected data)
+  const redReasonChips = useMemo(() => {
+    if (showVerdict !== "RED") return [];
+
+    const chips: { label: string; weight: number }[] = [];
+
+    // Prefer tee-time block, else selected day summary, else current
+    const tempC =
+      (typeof teeTimeResult?.temp === "number" ? teeTimeResult.temp : null) ??
+      (selectedDay === 0 ? weather?.current?.temp : null) ??
+      null;
+
+    const windKph =
+      (typeof teeTimeResult?.windKph === "number" ? teeTimeResult.windKph : null) ??
+      (selectedDay === 0 ? weather?.current?.windKph : null) ??
+      (typeof selectedDaily?.windMax === "number" ? selectedDaily.windMax : null) ??
+      null;
+
+    const conditions =
+      teeTimeResult?.conditions ??
+      (selectedDay === 0 ? weather?.current?.conditions : selectedDaily?.conditions) ??
+      null;
+
+    // Precip is often on blocks; if not available, infer from conditions text
+    const precipMm =
+      (typeof (teeTimeResult as any)?.precipMm === "number" ? (teeTimeResult as any).precipMm : null) ??
+      null;
+
+    // --- Temperature chip
+    if (typeof tempC === "number") {
+      if (tempC <= 2) chips.push({ label: "❄️ Too cold", weight: 100 });
+      else if (tempC <= 6) chips.push({ label: "🥶 Cold", weight: 70 });
+    }
+
+    // --- Wind chip
+    if (typeof windKph === "number") {
+      if (windKph >= 35) chips.push({ label: "🌬 Very windy", weight: 90 });
+      else if (windKph >= 25) chips.push({ label: "🌬 Windy", weight: 65 });
+    }
+
+    // --- Precip / snow / rain chip
+    const cond = typeof conditions === "string" ? conditions.toLowerCase() : "";
+    const precipy =
+      (typeof precipMm === "number" && precipMm > 0) ||
+      cond.includes("rain") ||
+      cond.includes("drizzle") ||
+      cond.includes("thunder") ||
+      cond.includes("snow");
+
+    if (precipy) {
+      if (cond.includes("snow")) chips.push({ label: "🌨 Snow", weight: 95 });
+      else chips.push({ label: "🌧 Wet", weight: 80 });
+    }
+
+    // --- “Dark” / “Daylight” hint if they picked a tee time far from daylight
+    if (teeTime && teeTimeResult && (teeTimeResult as any).inDaylight === false) {
+      chips.push({ label: "🌙 Low light", weight: 60 });
+    }
+
+    // If still empty, fall back to generic chip
+    if (chips.length === 0) chips.push({ label: "🚫 Poor conditions", weight: 50 });
+
+    // Top 3 by weight
+    return chips
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, 3)
+      .map((c) => c.label);
+  }, [showVerdict, teeTime, teeTimeResult, selectedDay, selectedDaily, weather]);
 
   async function loadAll(c: Coords) {
     setLoading(true);
@@ -33,11 +184,13 @@ export default function HomePage() {
     setWeather(w);
     setCourses(cs);
 
-    // Only fetch simulators when verdict is RED
-    if (w?.golf?.verdict === "RED") {
-      const sims = await fetch(`/api/simulators?lat=${c.lat}&lon=${c.lon}`).then((r) =>
-        r.json()
-      );
+    // Reset to today on new search
+    setSelectedDay(0);
+    setTeeTime("");
+
+    const day0Verdict = w?.daily?.[0]?.golf?.verdict ?? w?.golf?.verdict;
+    if (day0Verdict === "RED") {
+      const sims = await fetch(`/api/simulators?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json());
       setSimulators(sims);
     } else {
       setSimulators(null);
@@ -45,6 +198,29 @@ export default function HomePage() {
 
     setLoading(false);
   }
+
+  // When day changes, clear tee time (keeps things clean + avoids timezone mismatch confusion)
+  useEffect(() => {
+    setTeeTime("");
+  }, [selectedDay]);
+
+  // When day changes, toggle simulators based on selected day
+  useEffect(() => {
+    async function maybeLoadSims() {
+      if (!coords || !weather?.daily) return;
+      const v = weather?.daily?.[selectedDay]?.golf?.verdict;
+      if (v === "RED") {
+        const sims = await fetch(`/api/simulators?lat=${coords.lat}&lon=${coords.lon}`).then((r) =>
+          r.json()
+        );
+        setSimulators(sims);
+      } else {
+        setSimulators(null);
+      }
+    }
+    maybeLoadSims();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDay]);
 
   function useMyLocation() {
     if (!navigator.geolocation) {
@@ -63,90 +239,341 @@ export default function HomePage() {
     );
   }
 
+  // Debounced autocomplete
+  useEffect(() => {
+    const q = cityQuery.trim();
+    if (q.length < 2) {
+      setPredictions([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        setSearching(true);
+        const res = await fetch(`/api/location/suggest?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        setPredictions(Array.isArray(data?.predictions) ? data.predictions : []);
+      } catch {
+        setPredictions([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(t);
+  }, [cityQuery]);
+
+  // close dropdown on outside click
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (!boxRef.current) return;
+      if (!boxRef.current.contains(e.target as Node)) setPredictions([]);
+    }
+    window.addEventListener("mousedown", onClick);
+    return () => window.removeEventListener("mousedown", onClick);
+  }, []);
+
+  async function choosePrediction(p: Prediction) {
+    try {
+      setPredictions([]);
+      setGeoErr(null);
+      setLoading(true);
+
+      const res = await fetch(`/api/location/resolve?placeId=${encodeURIComponent(p.placeId)}`);
+      const data = await res.json();
+
+      if (!res.ok || !Number.isFinite(data?.lat) || !Number.isFinite(data?.lon)) {
+        setGeoErr(data?.error || "Couldn’t resolve that city.");
+        setLoading(false);
+        return;
+      }
+
+      setCityQuery(data?.address || p.description);
+
+      const c = { lat: Number(data.lat), lon: Number(data.lon) };
+      setCoords(c);
+      await loadAll(c);
+    } catch {
+      setGeoErr("Couldn’t resolve that city.");
+      setLoading(false);
+    }
+  }
+
+  const showCourses = Array.isArray(courses?.courses) ? courses.courses : [];
+  const showSims = Array.isArray(simulators?.simulators) ? simulators.simulators : [];
+
   return (
-    <main className="min-h-screen bg-gray-50 text-gray-900">
-      <div className="mx-auto max-w-3xl p-6">
-        <h1 className="text-3xl font-bold tracking-tight">Can I Golf Today?</h1>
-        <p className="mt-2 text-gray-600">
-          We’ll check wind + rain + temp and suggest nearby courses.
-        </p>
+    <main className="min-h-screen bg-[#0b0f14] text-white">
+      {/* HERO */}
+      <div className="relative">
+        <div
+          className="absolute inset-0 bg-cover bg-center opacity-35"
+          style={{
+            backgroundImage:
+              "url(https://images.unsplash.com/photo-1520975958225-6b8b2b8d2c1c?auto=format&fit=crop&w=2400&q=80)",
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/50 to-[#0b0f14]" />
 
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <button
-            onClick={useMyLocation}
-            className="rounded-xl bg-black px-4 py-2 text-white hover:opacity-90"
-          >
-            Use my location
-          </button>
+        <div className="relative mx-auto max-w-5xl px-6 pb-10 pt-10">
+          <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+            <div className="max-w-2xl">
+              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs text-white/80">
+                ⛳ CanIGolfToday.com
+              </div>
 
-          {coords && (
-            <div className="text-sm text-gray-600">
-              Lat {coords.lat.toFixed(3)}, Lon {coords.lon.toFixed(3)}
+              <h1 className="mt-4 text-4xl font-semibold tracking-tight md:text-5xl">
+                Your tee-time forecast.
+              </h1>
+              <p className="mt-3 text-white/75">
+                Search a city — we’ll score the conditions, find the best daylight window, and show nearby courses.
+              </p>
             </div>
-          )}
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={useMyLocation}
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
+              >
+                Use my location
+              </button>
+              {coords && (
+                <div className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/80">
+                  {coords.lat.toFixed(3)}, {coords.lon.toFixed(3)}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Search */}
+          <section className="mt-8" ref={boxRef}>
+            <div className="relative">
+              <input
+                value={cityQuery}
+                onChange={(e) => setCityQuery(e.target.value)}
+                placeholder="Search city: Guelph, Toronto, Myrtle Beach…"
+                className="w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white placeholder:text-white/50 outline-none focus:border-white/25"
+              />
+
+              {predictions.length > 0 && (
+                <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-2xl border border-white/10 bg-[#0f1620] shadow-xl">
+                  {predictions.map((p) => (
+                    <button
+                      key={p.placeId}
+                      onClick={() => choosePrediction(p)}
+                      className="block w-full px-4 py-3 text-left text-sm text-white/90 hover:bg-white/5"
+                    >
+                      {p.description}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {searching && <div className="mt-2 text-xs text-white/60">Searching…</div>}
+            </div>
+
+            {geoErr && (
+              <div className="mt-3 rounded-2xl bg-rose-500/15 p-3 text-sm text-rose-200">
+                {geoErr}
+              </div>
+            )}
+          </section>
         </div>
+      </div>
 
-        {geoErr && (
-          <div className="mt-4 rounded-xl bg-red-50 p-3 text-red-700">{geoErr}</div>
-        )}
+      {/* CONTENT */}
+      <div className="mx-auto max-w-5xl px-6 pb-16 pt-8">
+        {loading && <div className="text-white/70">Loading…</div>}
 
-        {loading && <div className="mt-6 text-gray-600">Loading…</div>}
+        {/* Verdict Card */}
+        {(weather?.golf || selectedDaily?.golf) && (
+          <section className={`rounded-3xl bg-white/5 p-6 shadow-sm ring-1 ${style.ring}`}>
+            <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-3">
+                  <div className={`h-10 w-10 rounded-2xl ${style.pill} grid place-items-center text-lg`}>
+                    {style.dot}
+                  </div>
+                  <div>
+                    <div className="text-2xl font-semibold">{verdictLabel}</div>
+                    <div className="mt-1 text-sm text-white/70">
+                      Score: <span className="font-semibold text-white">{showScore}</span>/100 —{" "}
+                      {showReason}
+                    </div>
 
-        {weather?.golf && (
-          <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-xl font-semibold">{verdictLabel}</div>
-                <div className="mt-1 text-sm text-gray-600">
-                  Score: <span className="font-medium">{weather.golf.score}</span>/100 —{" "}
-                  {weather.golf.reason}
+                    {/* ✅ confidence sentence */}
+                    {confidenceLine && (
+                      <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>
+                    )}
+
+                    {/* ✅ reason chips when RED */}
+                    {showVerdict === "RED" && redReasonChips.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {redReasonChips.map((c) => (
+                          <Chip key={c}>{c}</Chip>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {weather?.golf?.season === "WINTER" && weather?.golf?.verdict === "RED" && (
-                  <div className="mt-1 text-xs text-gray-500">
-                    Winter conditions — most courses are closed.
+                {bestWindowText && (
+                  <div className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
+                    <span className="text-white/70">Best tee-time window</span>
+                    <span className="font-semibold">{bestWindowText}</span>
+                  </div>
+                )}
+
+                {/* Tee time (optional) */}
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <div className="text-sm text-white/70">Tee time (optional)</div>
+
+                  <input
+                    type="time"
+                    value={teeTime}
+                    onChange={(e) => setTeeTime(e.target.value)}
+                    className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-white outline-none focus:border-white/25"
+                  />
+
+                  {teeTimeResult && (
+                    <div className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
+                      <span className="text-white/60">At {teeTime}:</span>{" "}
+                      <span className="font-semibold">{teeTimeResult.score}/100</span>{" "}
+                      <span className="text-white/60">
+                        (wind {teeTimeResult.windKph}k, {teeTimeResult.conditions})
+                      </span>
+                    </div>
+                  )}
+
+                  {teeTime && (
+                    <button
+                      onClick={() => setTeeTime("")}
+                      className="text-sm text-white/60 underline decoration-white/30 hover:text-white"
+                    >
+                      clear
+                    </button>
+                  )}
+                </div>
+
+                {/* 5-day strip */}
+                {Array.isArray(weather?.daily) && weather.daily.length > 0 && (
+                  <div className="mt-5">
+                    <div className="text-xs font-semibold text-white/60">Next 5 days</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {weather.daily.slice(0, 5).map((d: any, idx: number) => {
+                        const v = d?.golf?.verdict;
+                        const dot = v === "GREEN" ? "🟢" : v === "YELLOW" ? "🟡" : "🔴";
+                        const active = idx === selectedDay;
+
+                        return (
+                          <button
+                            key={d.dateKey || idx}
+                            onClick={() => setSelectedDay(idx)}
+                            className={[
+                              "rounded-2xl border px-4 py-3 text-left text-sm transition",
+                              active
+                                ? "border-white/30 bg-white/10"
+                                : "border-white/10 bg-white/5 hover:bg-white/10",
+                            ].join(" ")}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span>{dot}</span>
+                              <span className="font-semibold">{d.dayLabel}</span>
+                            </div>
+                            <div className="mt-1 text-xs text-white/65">
+                              {d.maxTemp ?? "—"}° / {d.minTemp ?? "—"}° · wind {d.windMax ?? "—"}k
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
 
-              <div className="text-right text-sm text-gray-700">
-                <div>
-                  Temp: {weather.current?.temp ?? "—"}°C (feels{" "}
-                  {weather.current?.feels ?? "—"}°C)
-                </div>
-                <div>
-                  Wind: {weather.current?.windKph ?? "—"} km/h (gust{" "}
-                  {weather.current?.gustKph ?? "—"})
-                </div>
-                {weather.current?.conditions && (
-                  <div>Conditions: {weather.current.conditions}</div>
+              <div className="rounded-3xl bg-white/5 p-5 text-sm text-white/80 ring-1 ring-white/10 md:min-w-[280px]">
+                {selectedDay === 0 ? (
+                  <>
+                    <div className="flex justify-between gap-6">
+                      <span className="text-white/60">Temp</span>
+                      <span>
+                        {weather?.current?.temp ?? "—"}°C{" "}
+                        <span className="text-white/50">
+                          (feels {weather?.current?.feels ?? "—"}°C)
+                        </span>
+                      </span>
+                    </div>
+                    <div className="mt-2 flex justify-between gap-6">
+                      <span className="text-white/60">Wind</span>
+                      <span>
+                        {weather?.current?.windKph ?? "—"} km/h{" "}
+                        <span className="text-white/50">
+                          (gust {weather?.current?.gustKph ?? "—"})
+                        </span>
+                      </span>
+                    </div>
+                    {weather?.current?.conditions && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">Conditions</span>
+                        <span>{weather.current.conditions}</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between gap-6">
+                      <span className="text-white/60">High / Low</span>
+                      <span>
+                        {selectedDaily?.maxTemp ?? "—"}° / {selectedDaily?.minTemp ?? "—"}°
+                      </span>
+                    </div>
+                    <div className="mt-2 flex justify-between gap-6">
+                      <span className="text-white/60">Max wind</span>
+                      <span>{selectedDaily?.windMax ?? "—"} km/h</span>
+                    </div>
+                    {selectedDaily?.conditions && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">Conditions</span>
+                        <span>{selectedDaily.conditions}</span>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
           </section>
         )}
 
-        {courses?.courses?.length > 0 && (
-          <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold">
-              Nearby courses
-              {weather?.golf?.verdict === "RED" ? " (likely closed)" : ""}
-            </h2>
+        {/* Courses */}
+        {showCourses.length > 0 && (
+          <section className="mt-8">
+            <div className="flex items-end justify-between gap-6">
+              <h2 className="text-xl font-semibold">Nearby courses</h2>
+              <div className="text-sm text-white/60">
+                {showVerdict === "RED" ? "Likely closed (try sims)" : "Tap to open in Maps"}
+              </div>
+            </div>
 
-            <div className="mt-3 grid gap-3">
-              {courses.courses.map((c: any) => (
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {showCourses.map((c: any) => (
                 <a
                   key={c.placeId}
                   href={c.mapsUrl || "#"}
                   target="_blank"
                   rel="noreferrer"
-                  className="rounded-xl border border-gray-100 p-4 hover:bg-gray-50"
+                  className="group rounded-3xl border border-white/10 bg-white/5 p-5 transition hover:bg-white/10"
                 >
-                  <div className="font-semibold">{c.name}</div>
-                  <div className="text-sm text-gray-600">{c.address ?? ""}</div>
-                  <div className="mt-1 text-sm text-gray-700">
-                    {c.rating ? `⭐ ${c.rating} (${c.userRatingsTotal ?? 0})` : "No rating yet"}
-                    {c.openNow === true ? " · Open now" : c.openNow === false ? " · Closed" : ""}
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="truncate text-base font-semibold">{c.name}</div>
+                      <div className="mt-1 line-clamp-2 text-sm text-white/65">{c.address ?? ""}</div>
+                      <div className="mt-3 text-sm text-white/80">
+                        {c.rating ? `⭐ ${c.rating} (${c.userRatingsTotal ?? 0})` : "No rating yet"}
+                        {c.openNow === true ? " · Open now" : c.openNow === false ? " · Closed" : ""}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-white/10 px-3 py-2 text-xs text-white/70 group-hover:bg-white/15">
+                      View
+                    </div>
                   </div>
                 </a>
               ))}
@@ -154,30 +581,45 @@ export default function HomePage() {
           </section>
         )}
 
-        {weather?.golf?.verdict === "RED" && simulators?.simulators?.length > 0 && (
-          <section className="mt-6 rounded-2xl bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold">Indoor golf / simulators nearby</h2>
+        {/* Simulators */}
+        {showVerdict === "RED" && showSims.length > 0 && (
+          <section className="mt-8">
+            <div className="flex items-end justify-between gap-6">
+              <h2 className="text-xl font-semibold">Indoor golf / simulators</h2>
+              <div className="text-sm text-white/60">Because it’s a red day outside.</div>
+            </div>
 
-            <div className="mt-3 grid gap-3">
-              {simulators.simulators.map((s: any) => (
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {showSims.map((s: any) => (
                 <a
                   key={s.placeId}
                   href={s.mapsUrl || "#"}
                   target="_blank"
                   rel="noreferrer"
-                  className="rounded-xl border border-gray-100 p-4 hover:bg-gray-50"
+                  className="group rounded-3xl border border-white/10 bg-white/5 p-5 transition hover:bg-white/10"
                 >
-                  <div className="font-semibold">{s.name}</div>
-                  <div className="text-sm text-gray-600">{s.address ?? ""}</div>
-                  <div className="mt-1 text-sm text-gray-700">
-                    {s.rating ? `⭐ ${s.rating} (${s.userRatingsTotal ?? 0})` : "No rating yet"}
-                    {s.openNow === true ? " · Open now" : s.openNow === false ? " · Closed" : ""}
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="truncate text-base font-semibold">{s.name}</div>
+                      <div className="mt-1 line-clamp-2 text-sm text-white/65">{s.address ?? ""}</div>
+                      <div className="mt-3 text-sm text-white/80">
+                        {s.rating ? `⭐ ${s.rating} (${s.userRatingsTotal ?? 0})` : "No rating yet"}
+                        {s.openNow === true ? " · Open now" : s.openNow === false ? " · Closed" : ""}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-white/10 px-3 py-2 text-xs text-white/70 group-hover:bg-white/15">
+                      View
+                    </div>
                   </div>
                 </a>
               ))}
             </div>
           </section>
         )}
+
+        <div className="mt-14 text-center text-xs text-white/45">
+          Built for quick decisions — not perfect predictions. Always check course openings + frost delays.
+        </div>
       </div>
     </main>
   );
