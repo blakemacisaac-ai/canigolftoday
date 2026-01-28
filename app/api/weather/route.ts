@@ -1,6 +1,29 @@
 import { NextResponse } from "next/server";
 import { golfabilityScore } from "@/lib/golfability";
 
+type GolfVerdict = "GREEN" | "YELLOW" | "RED";
+
+type GolfScore = {
+  score: number;
+  verdict: GolfVerdict;
+  reason: string;
+};
+
+type ForecastBlock = {
+  dt: number;
+  label: string;
+  dayKey: string;
+  dayLabel: string;
+  temp: number;
+  feels: number;
+  windKph: number;
+  gustKph: number;
+  precipMm: number;
+  conditions: string | null;
+  inDaylight: boolean;
+  golf: GolfScore;
+};
+
 function msToKph(ms: number) {
   return ms * 3.6;
 }
@@ -43,7 +66,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Weather fetch failed" }, { status: 502 });
   }
 
-  // Sunrise/sunset from current conditions (local to that city)
+  // Sunrise/sunset from current conditions (unix seconds)
   const sunrise = Number(current.sys?.sunrise ?? 0);
   const sunset = Number(current.sys?.sunset ?? 0);
 
@@ -54,13 +77,14 @@ export async function GET(req: Request) {
   const daylightStart = sunrise + 60 * 60;
   const daylightEnd = sunset - 60 * 60;
 
-  const blocks = forecast.list.slice(0, 40).map((b: any) => {
+  const blocks: ForecastBlock[] = (forecast.list ?? []).slice(0, 40).map((b: any) => {
     const wind = msToKph(b.wind?.speed ?? 0);
     const gust = msToKph(b.wind?.gust ?? 0);
-    const precipMm =
+    const precipRaw =
       Number(b?.rain?.["3h"] ?? 0) + Number(b?.snow?.["3h"] ?? 0);
+    const precipMm = Math.round(precipRaw * 10) / 10;
 
-    const score = golfabilityScore({
+    const golf = golfabilityScore({
       tempC: b.main.temp,
       feelsLikeC: b.main.feels_like,
       windKph: wind,
@@ -71,21 +95,23 @@ export async function GET(req: Request) {
       conditions: b.weather?.[0]?.main,
       lat: Number(lat),
       month: nowMonth,
-    });
+    }) as GolfScore;
+
+    const dt = Number(b.dt);
 
     return {
-      dt: b.dt,
-      label: formatTime(b.dt),
-      dayKey: new Date(b.dt * 1000).toISOString().split("T")[0],
-      dayLabel: formatDay(b.dt),
+      dt,
+      label: formatTime(dt),
+      dayKey: new Date(dt * 1000).toISOString().split("T")[0],
+      dayLabel: formatDay(dt),
       temp: Math.round(b.main.temp),
       feels: Math.round(b.main.feels_like),
       windKph: Math.round(wind),
       gustKph: Math.round(gust),
-      precipMm: Math.round(precipMm * 10) / 10,
+      precipMm,
       conditions: b.weather?.[0]?.main ?? null,
-      inDaylight: b.dt >= daylightStart && b.dt <= daylightEnd,
-      golf: score,
+      inDaylight: dt >= daylightStart && dt <= daylightEnd,
+      golf,
     };
   });
 
@@ -95,26 +121,23 @@ export async function GET(req: Request) {
   const todayDaylight = todayAll.filter((b) => b.inDaylight);
 
   const bestTodayBlock =
-    todayDaylight.reduce((a, b) => (b.golf.score > a.golf.score ? b : a), todayDaylight[0]) ??
-    null;
+    todayDaylight.length > 0
+      ? todayDaylight.reduce((a, b) => (b.golf.score > a.golf.score ? b : a))
+      : null;
 
-  let bestWindow: any = null;
+  let bestWindow: { startLabel: string; endLabel: string; avgScore: number } | null = null;
   for (let i = 0; i < todayDaylight.length - 1; i++) {
     const a = todayDaylight[i];
     const b = todayDaylight[i + 1];
     const avg = Math.round((a.golf.score + b.golf.score) / 2);
 
     if (!bestWindow || avg > bestWindow.avgScore) {
-      bestWindow = {
-        startLabel: a.label,
-        endLabel: b.label,
-        avgScore: avg,
-      };
+      bestWindow = { startLabel: a.label, endLabel: b.label, avgScore: avg };
     }
   }
 
   // ---------- GROUP into days (next 5 unique day keys) ----------
-  const grouped: Record<string, any[]> = {};
+  const grouped: Record<string, ForecastBlock[]> = {};
   for (const b of blocks) {
     if (!grouped[b.dayKey]) grouped[b.dayKey] = [];
     grouped[b.dayKey].push(b);
@@ -125,13 +148,11 @@ export async function GET(req: Request) {
   const daily = dayKeys.map((key) => {
     const dayBlocks = grouped[key];
 
-    // Summary stats
     const minTemp = Math.min(...dayBlocks.map((b) => b.temp));
     const maxTemp = Math.max(...dayBlocks.map((b) => b.temp));
     const windMax = Math.max(...dayBlocks.map((b) => b.windKph));
     const precipTotal = dayBlocks.reduce((sum, b) => sum + (b.precipMm ?? 0), 0);
 
-    // Representative conditions: use the block with most ratings or middle block
     const rep = dayBlocks[Math.floor(dayBlocks.length / 2)];
     const conditions = rep?.conditions ?? null;
 
@@ -141,27 +162,20 @@ export async function GET(req: Request) {
 
     const avg =
       scoreBlocks.length > 0
-        ? Math.round(
-            scoreBlocks.reduce((sum, b) => sum + (b.golf?.score ?? 0), 0) / scoreBlocks.length
-          )
+        ? Math.round(scoreBlocks.reduce((sum, b) => sum + (b.golf?.score ?? 0), 0) / scoreBlocks.length)
         : 0;
 
-    const verdict = avg >= 80 ? "GREEN" : avg >= 55 ? "YELLOW" : "RED";
+    const verdict: GolfVerdict = avg >= 80 ? "GREEN" : avg >= 55 ? "YELLOW" : "RED";
 
-    // Best window for THIS day (daylight only)
-    let dayBestWindow: any = null;
-    const windowBlocks = scoreBlocks; // daylight-only when possible
-    for (let i = 0; i < windowBlocks.length - 1; i++) {
-      const a = windowBlocks[i];
-      const b = windowBlocks[i + 1];
-      const windowAvg = Math.round(((a.golf?.score ?? 0) + (b.golf?.score ?? 0)) / 2);
+    // Best window for THIS day (daylight only if possible)
+    let dayBestWindow: { startLabel: string; endLabel: string; avgScore: number } | null = null;
+    for (let i = 0; i < scoreBlocks.length - 1; i++) {
+      const a = scoreBlocks[i];
+      const b = scoreBlocks[i + 1];
+      const windowAvg = Math.round((a.golf.score + b.golf.score) / 2);
 
       if (!dayBestWindow || windowAvg > dayBestWindow.avgScore) {
-        dayBestWindow = {
-          startLabel: a.label,
-          endLabel: b.label,
-          avgScore: windowAvg,
-        };
+        dayBestWindow = { startLabel: a.label, endLabel: b.label, avgScore: windowAvg };
       }
     }
 
@@ -185,7 +199,7 @@ export async function GET(req: Request) {
       },
       bestWindow: verdict === "RED" ? null : dayBestWindow,
 
-      // ✅ EXPANDED BLOCKS FOR UI (tee-time + chips)
+      // blocks for tee-time scoring + reason chips
       blocks: dayBlocks.map((b) => ({
         dt: b.dt,
         label: b.label,
@@ -196,9 +210,9 @@ export async function GET(req: Request) {
         precipMm: b.precipMm,
         conditions: b.conditions,
         inDaylight: b.inDaylight,
-        score: b.golf?.score,
-        verdict: b.golf?.verdict,
-        reason: b.golf?.reason,
+        score: b.golf.score,
+        verdict: b.golf.verdict,
+        reason: b.golf.reason,
       })),
     };
   });
@@ -212,7 +226,6 @@ export async function GET(req: Request) {
       conditions: current.weather?.[0]?.main ?? null,
     },
 
-    // Today’s overall verdict uses the best daylight block (or null)
     golf: bestTodayBlock?.golf ?? null,
 
     bestTime: {
@@ -229,10 +242,7 @@ export async function GET(req: Request) {
       daylightEndLabel: formatTime(daylightEnd),
     },
 
-    // Full forecast blocks (next ~5 days in 3-hour increments)
     forecast: blocks,
-
-    // Daily summary + blocks for tee-time and chips
     daily,
   });
 }

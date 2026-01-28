@@ -56,7 +56,7 @@ export default function HomePage() {
 
     for (const b of blocks) {
       const d = new Date(b.dt * 1000);
-      const m = d.getHours() * 60 + d.getMinutes(); // browser local time
+      const m = d.getHours() * 60 + d.getMinutes();
       const delta = Math.abs(m - targetMinutes);
       if (delta < bestDelta) {
         bestDelta = delta;
@@ -94,7 +94,6 @@ export default function HomePage() {
 
   const style = verdictStyles(showVerdict || "RED");
 
-  // ✅ One-line confidence sentence
   const confidenceLine = useMemo(() => {
     const v = showVerdict;
     if (v === "GREEN") return "Book it with confidence.";
@@ -103,13 +102,11 @@ export default function HomePage() {
     return null;
   }, [showVerdict]);
 
-  // ✅ 2–3 reason chips when RED (derived from current/selected data)
   const redReasonChips = useMemo(() => {
     if (showVerdict !== "RED") return [];
 
     const chips: { label: string; weight: number }[] = [];
 
-    // Prefer tee-time block, else selected day summary, else current
     const tempC =
       (typeof teeTimeResult?.temp === "number" ? teeTimeResult.temp : null) ??
       (selectedDay === 0 ? weather?.current?.temp : null) ??
@@ -126,24 +123,19 @@ export default function HomePage() {
       (selectedDay === 0 ? weather?.current?.conditions : selectedDaily?.conditions) ??
       null;
 
-    // Precip is often on blocks; if not available, infer from conditions text
     const precipMm =
-      (typeof (teeTimeResult as any)?.precipMm === "number" ? (teeTimeResult as any).precipMm : null) ??
-      null;
+      (typeof teeTimeResult?.precipMm === "number" ? teeTimeResult.precipMm : null) ?? null;
 
-    // --- Temperature chip
     if (typeof tempC === "number") {
       if (tempC <= 2) chips.push({ label: "❄️ Too cold", weight: 100 });
       else if (tempC <= 6) chips.push({ label: "🥶 Cold", weight: 70 });
     }
 
-    // --- Wind chip
     if (typeof windKph === "number") {
       if (windKph >= 35) chips.push({ label: "🌬 Very windy", weight: 90 });
       else if (windKph >= 25) chips.push({ label: "🌬 Windy", weight: 65 });
     }
 
-    // --- Precip / snow / rain chip
     const cond = typeof conditions === "string" ? conditions.toLowerCase() : "";
     const precipy =
       (typeof precipMm === "number" && precipMm > 0) ||
@@ -157,15 +149,12 @@ export default function HomePage() {
       else chips.push({ label: "🌧 Wet", weight: 80 });
     }
 
-    // --- “Dark” / “Daylight” hint if they picked a tee time far from daylight
-    if (teeTime && teeTimeResult && (teeTimeResult as any).inDaylight === false) {
+    if (teeTime && teeTimeResult && teeTimeResult.inDaylight === false) {
       chips.push({ label: "🌙 Low light", weight: 60 });
     }
 
-    // If still empty, fall back to generic chip
     if (chips.length === 0) chips.push({ label: "🚫 Poor conditions", weight: 50 });
 
-    // Top 3 by weight
     return chips
       .sort((a, b) => b.weight - a.weight)
       .slice(0, 3)
@@ -184,7 +173,6 @@ export default function HomePage() {
     setWeather(w);
     setCourses(cs);
 
-    // Reset to today on new search
     setSelectedDay(0);
     setTeeTime("");
 
@@ -199,12 +187,10 @@ export default function HomePage() {
     setLoading(false);
   }
 
-  // When day changes, clear tee time (keeps things clean + avoids timezone mismatch confusion)
   useEffect(() => {
     setTeeTime("");
   }, [selectedDay]);
 
-  // When day changes, toggle simulators based on selected day
   useEffect(() => {
     async function maybeLoadSims() {
       if (!coords || !weather?.daily) return;
@@ -239,7 +225,6 @@ export default function HomePage() {
     );
   }
 
-  // Debounced autocomplete
   useEffect(() => {
     const q = cityQuery.trim();
     if (q.length < 2) {
@@ -262,7 +247,6 @@ export default function HomePage() {
     return () => clearTimeout(t);
   }, [cityQuery]);
 
-  // close dropdown on outside click
   useEffect(() => {
     function onClick(e: MouseEvent) {
       if (!boxRef.current) return;
@@ -303,7 +287,6 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen bg-[#0b0f14] text-white">
-      {/* HERO */}
       <div className="relative">
         <div
           className="absolute inset-0 bg-cover bg-center opacity-35"
@@ -344,7 +327,6 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Search */}
           <section className="mt-8" ref={boxRef}>
             <div className="relative">
               <input
@@ -380,11 +362,9 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* CONTENT */}
       <div className="mx-auto max-w-5xl px-6 pb-16 pt-8">
         {loading && <div className="text-white/70">Loading…</div>}
 
-        {/* Verdict Card */}
         {(weather?.golf || selectedDaily?.golf) && (
           <section className={`rounded-3xl bg-white/5 p-6 shadow-sm ring-1 ${style.ring}`}>
             <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
@@ -400,12 +380,8 @@ export default function HomePage() {
                       {showReason}
                     </div>
 
-                    {/* ✅ confidence sentence */}
-                    {confidenceLine && (
-                      <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>
-                    )}
+                    {confidenceLine && <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>}
 
-                    {/* ✅ reason chips when RED */}
                     {showVerdict === "RED" && redReasonChips.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {redReasonChips.map((c) => (
@@ -423,7 +399,6 @@ export default function HomePage() {
                   </div>
                 )}
 
-                {/* Tee time (optional) */}
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <div className="text-sm text-white/70">Tee time (optional)</div>
 
@@ -454,7 +429,6 @@ export default function HomePage() {
                   )}
                 </div>
 
-                {/* 5-day strip */}
                 {Array.isArray(weather?.daily) && weather.daily.length > 0 && (
                   <div className="mt-5">
                     <div className="text-xs font-semibold text-white/60">Next 5 days</div>
@@ -470,9 +444,7 @@ export default function HomePage() {
                             onClick={() => setSelectedDay(idx)}
                             className={[
                               "rounded-2xl border px-4 py-3 text-left text-sm transition",
-                              active
-                                ? "border-white/30 bg-white/10"
-                                : "border-white/10 bg-white/5 hover:bg-white/10",
+                              active ? "border-white/30 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
                             ].join(" ")}
                           >
                             <div className="flex items-center gap-2">
@@ -497,18 +469,14 @@ export default function HomePage() {
                       <span className="text-white/60">Temp</span>
                       <span>
                         {weather?.current?.temp ?? "—"}°C{" "}
-                        <span className="text-white/50">
-                          (feels {weather?.current?.feels ?? "—"}°C)
-                        </span>
+                        <span className="text-white/50">(feels {weather?.current?.feels ?? "—"}°C)</span>
                       </span>
                     </div>
                     <div className="mt-2 flex justify-between gap-6">
                       <span className="text-white/60">Wind</span>
                       <span>
                         {weather?.current?.windKph ?? "—"} km/h{" "}
-                        <span className="text-white/50">
-                          (gust {weather?.current?.gustKph ?? "—"})
-                        </span>
+                        <span className="text-white/50">(gust {weather?.current?.gustKph ?? "—"})</span>
                       </span>
                     </div>
                     {weather?.current?.conditions && (
@@ -543,14 +511,11 @@ export default function HomePage() {
           </section>
         )}
 
-        {/* Courses */}
         {showCourses.length > 0 && (
           <section className="mt-8">
             <div className="flex items-end justify-between gap-6">
               <h2 className="text-xl font-semibold">Nearby courses</h2>
-              <div className="text-sm text-white/60">
-                {showVerdict === "RED" ? "Likely closed (try sims)" : "Tap to open in Maps"}
-              </div>
+              <div className="text-sm text-white/60">{showVerdict === "RED" ? "Likely closed (try sims)" : "Tap to open in Maps"}</div>
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -581,7 +546,6 @@ export default function HomePage() {
           </section>
         )}
 
-        {/* Simulators */}
         {showVerdict === "RED" && showSims.length > 0 && (
           <section className="mt-8">
             <div className="flex items-end justify-between gap-6">
