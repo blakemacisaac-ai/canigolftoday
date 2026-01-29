@@ -19,6 +19,119 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** v1.1: Courses — curate the list (less is more) */
+function scoreCourse(c: any) {
+  // Higher is better
+  const rating = typeof c?.rating === "number" ? c.rating : 0;
+  const ratingsCount = typeof c?.userRatingsTotal === "number" ? c.userRatingsTotal : 0;
+
+  // Prefer open-now slightly
+  const openBoost = c?.openNow === true ? 20 : c?.openNow === false ? -10 : 0;
+
+  // Weak signal: more ratings = more trustworthy, capped
+  const countBoost = Math.min(10, Math.floor(ratingsCount / 50)); // caps at +10
+
+  return rating * 10 + countBoost + openBoost;
+}
+
+function pickTopCourses(all: any[], limit = 4) {
+  return [...all]
+    .filter((c) => c?.mapsUrl) // only actionable
+    .sort((a, b) => scoreCourse(b) - scoreCourse(a))
+    .slice(0, limit);
+}
+
+function CourseCard({ c }: { c: any }) {
+  const ratingText =
+    typeof c?.rating === "number"
+      ? `⭐ ${c.rating.toFixed(1)}${c?.userRatingsTotal ? ` (${c.userRatingsTotal})` : ""}`
+      : "No rating yet";
+
+  const openText = c?.openNow === true ? "Open now" : c?.openNow === false ? "Closed" : null;
+
+  return (
+    <a
+      href={c.mapsUrl || "#"}
+      target="_blank"
+      rel="noreferrer"
+      className="group rounded-3xl border border-white/10 bg-white/5 p-5 transition hover:bg-white/10"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="truncate text-base font-semibold">{c.name}</div>
+
+            <div className="inline-flex items-center gap-2">
+              <span className="rounded-full bg-white/10 px-2.5 py-1 text-xs text-white/80">
+                {ratingText}
+              </span>
+
+              {openText && (
+                <span className="rounded-full bg-white/10 px-2.5 py-1 text-xs text-white/70">
+                  {openText}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {c.address && <div className="mt-2 line-clamp-2 text-sm text-white/65">{c.address}</div>}
+
+          <div className="mt-4 text-sm text-white/70">Tap to open directions</div>
+        </div>
+
+        <div className="rounded-2xl bg-white/10 px-3 py-2 text-xs font-semibold text-white/80 group-hover:bg-white/15">
+          Maps →
+        </div>
+      </div>
+    </a>
+  );
+}
+
+function formatTimeLabel(d: Date) {
+  // e.g. "6:00 AM"
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function bestGolfHoursWindowText(daily: any, fallbackBestWindow?: any) {
+  // Only allow golf windows between 06:00 and 18:00
+  const START_HOUR = 6;
+  const END_HOUR = 18;
+
+  const blocks: any[] = Array.isArray(daily?.blocks) ? daily.blocks : [];
+  if (blocks.length === 0) {
+    // If we don't have blocks, keep existing bestWindow if present
+    if (fallbackBestWindow?.startLabel && fallbackBestWindow?.endLabel) {
+      return `${fallbackBestWindow.startLabel} – ${fallbackBestWindow.endLabel} (avg ${fallbackBestWindow.avgScore}/100)`;
+    }
+    return null;
+  }
+
+  // Filter to golfable hours
+  const inHours = blocks.filter((b) => {
+    const dt = typeof b?.dt === "number" ? b.dt : null;
+    if (!dt) return false;
+    const d = new Date(dt * 1000);
+    const h = d.getHours();
+    return h >= START_HOUR && h < END_HOUR;
+  });
+
+  if (inHours.length === 0) return null;
+
+  // Pick the single best-scoring block within golf hours
+  const best = [...inHours].sort((a, b) => (b?.score ?? -1) - (a?.score ?? -1))[0];
+  if (!best || typeof best.dt !== "number") return null;
+
+  const start = new Date(best.dt * 1000);
+  const end = new Date(start.getTime() + 60 * 60 * 1000); // +1 hour
+
+  const score = typeof best.score === "number" ? best.score : null;
+
+  return `${formatTimeLabel(start)} – ${formatTimeLabel(end)}${score !== null ? ` (avg ${score}/100)` : ""}`;
+}
+
+
+
+
 export default function HomePage() {
   const [coords, setCoords] = useState<Coords | null>(null);
   const [geoErr, setGeoErr] = useState<string | null>(null);
@@ -39,6 +152,9 @@ export default function HomePage() {
 
   // Optional tee time ("HH:MM")
   const [teeTime, setTeeTime] = useState<string>("");
+
+  // v1.1: “Show all courses” toggle
+  const [showAllCourses, setShowAllCourses] = useState(false);
 
   const selectedDaily = useMemo(() => weather?.daily?.[selectedDay] ?? null, [weather, selectedDay]);
 
@@ -83,11 +199,27 @@ export default function HomePage() {
     return "Not golfable";
   }, [showVerdict]);
 
-  const bestWindowText = useMemo(() => {
-    const bw = selectedDaily?.bestWindow ?? weather?.bestTime?.bestWindow;
-    if (!bw?.startLabel || !bw?.endLabel) return null;
+ const bestWindowText = useMemo(() => {
+  const bw = selectedDaily?.bestWindow ?? weather?.bestTime?.bestWindow;
+
+  // If the API window is already in golf hours, keep it.
+  if (bw?.startLabel && bw?.endLabel) {
+    // crude but effective: if it contains "AM/PM" labels, still might be off.
+    // We'll prefer our computed window whenever blocks exist.
+  }
+
+  // Prefer computed window limited to 6am–6pm if blocks exist
+  const computed = bestGolfHoursWindowText(selectedDaily, bw);
+  if (computed) return computed;
+
+  // fallback to API window if we can't compute
+  if (bw?.startLabel && bw?.endLabel) {
     return `${bw.startLabel} – ${bw.endLabel} (avg ${bw.avgScore}/100)`;
-  }, [selectedDaily, weather]);
+  }
+
+  return null;
+}, [selectedDaily, weather]);
+
 
   const showScore = teeTimeResult?.score ?? selectedDaily?.golf?.score ?? weather?.golf?.score;
   const showReason = teeTimeResult?.reason ?? selectedDaily?.golf?.reason ?? weather?.golf?.reason;
@@ -175,6 +307,7 @@ export default function HomePage() {
 
     setSelectedDay(0);
     setTeeTime("");
+    setShowAllCourses(false);
 
     const day0Verdict = w?.daily?.[0]?.golf?.verdict ?? w?.golf?.verdict;
     if (day0Verdict === "RED") {
@@ -282,8 +415,18 @@ export default function HomePage() {
     }
   }
 
-  const showCourses = Array.isArray(courses?.courses) ? courses.courses : [];
+  /** v1.1: curated courses */
+  const allCourses = Array.isArray(courses?.courses) ? courses.courses : [];
+  const topCourses = useMemo(() => pickTopCourses(allCourses, 4), [allCourses]);
+
   const showSims = Array.isArray(simulators?.simulators) ? simulators.simulators : [];
+
+  const restCourses = useMemo(() => {
+    if (!allCourses.length) return [];
+    if (!topCourses.length) return allCourses;
+    const topIds = new Set(topCourses.map((t: any) => t.placeId));
+    return allCourses.filter((c: any) => !topIds.has(c.placeId));
+  }, [allCourses, topCourses]);
 
   return (
     <main className="min-h-screen bg-[#0b0f14] text-white">
@@ -308,7 +451,8 @@ export default function HomePage() {
                 Your tee-time forecast.
               </h1>
               <p className="mt-3 text-white/75">
-                Search a city — we’ll score the conditions, find the best daylight window, and show nearby courses.
+                Search a city — we’ll score the conditions, find the best daylight window, and show
+                nearby courses.
               </p>
             </div>
 
@@ -370,7 +514,9 @@ export default function HomePage() {
             <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
                 <div className="flex items-center gap-3">
-                  <div className={`h-10 w-10 rounded-2xl ${style.pill} grid place-items-center text-lg`}>
+                  <div
+                    className={`h-10 w-10 rounded-2xl ${style.pill} grid place-items-center text-lg`}
+                  >
                     {style.dot}
                   </div>
                   <div>
@@ -380,7 +526,9 @@ export default function HomePage() {
                       {showReason}
                     </div>
 
-                    {confidenceLine && <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>}
+                    {confidenceLine && (
+                      <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>
+                    )}
 
                     {showVerdict === "RED" && redReasonChips.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-2">
@@ -444,7 +592,9 @@ export default function HomePage() {
                             onClick={() => setSelectedDay(idx)}
                             className={[
                               "rounded-2xl border px-4 py-3 text-left text-sm transition",
-                              active ? "border-white/30 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
+                              active
+                                ? "border-white/30 bg-white/10"
+                                : "border-white/10 bg-white/5 hover:bg-white/10",
                             ].join(" ")}
                           >
                             <div className="flex items-center gap-2">
@@ -452,7 +602,8 @@ export default function HomePage() {
                               <span className="font-semibold">{d.dayLabel}</span>
                             </div>
                             <div className="mt-1 text-xs text-white/65">
-                              {d.maxTemp ?? "—"}° / {d.minTemp ?? "—"}° · wind {d.windMax ?? "—"}k
+                              {d.maxTemp ?? "—"}° / {d.minTemp ?? "—"}° · wind{" "}
+                              {d.windMax ?? "—"}k
                             </div>
                           </button>
                         );
@@ -469,14 +620,18 @@ export default function HomePage() {
                       <span className="text-white/60">Temp</span>
                       <span>
                         {weather?.current?.temp ?? "—"}°C{" "}
-                        <span className="text-white/50">(feels {weather?.current?.feels ?? "—"}°C)</span>
+                        <span className="text-white/50">
+                          (feels {weather?.current?.feels ?? "—"}°C)
+                        </span>
                       </span>
                     </div>
                     <div className="mt-2 flex justify-between gap-6">
                       <span className="text-white/60">Wind</span>
                       <span>
                         {weather?.current?.windKph ?? "—"} km/h{" "}
-                        <span className="text-white/50">(gust {weather?.current?.gustKph ?? "—"})</span>
+                        <span className="text-white/50">
+                          (gust {weather?.current?.gustKph ?? "—"})
+                        </span>
                       </span>
                     </div>
                     {weather?.current?.conditions && (
@@ -511,38 +666,55 @@ export default function HomePage() {
           </section>
         )}
 
-        {showCourses.length > 0 && (
+        {/* v1.1: curated “Top picks near you” + expandable full list */}
+        {(topCourses.length > 0 || allCourses.length > 0) && (
           <section className="mt-8">
             <div className="flex items-end justify-between gap-6">
-              <h2 className="text-xl font-semibold">Nearby courses</h2>
-              <div className="text-sm text-white/60">{showVerdict === "RED" ? "Likely closed (try sims)" : "Tap to open in Maps"}</div>
+              <div>
+                <h2 className="text-xl font-semibold">Top picks near you</h2>
+                <div className="mt-1 text-sm text-white/60">
+                  Curated by rating + “open now” (quick list — not a directory).
+                </div>
+              </div>
+
+              <div className="text-sm text-white/60">
+                {showVerdict === "RED" ? "Likely closed (try sims)" : "Tap for directions"}
+              </div>
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {showCourses.map((c: any) => (
-                <a
-                  key={c.placeId}
-                  href={c.mapsUrl || "#"}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="group rounded-3xl border border-white/10 bg-white/5 p-5 transition hover:bg-white/10"
+            {topCourses.length > 0 ? (
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {topCourses.map((c: any) => (
+                  <CourseCard key={c.placeId} c={c} />
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
+                No top picks found nearby.
+              </div>
+            )}
+
+            {allCourses.length > 0 && (
+              <div className="mt-5 flex flex-col items-start gap-3">
+                <button
+                  onClick={() => setShowAllCourses((v) => !v)}
+                  className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 hover:bg-white/10"
                 >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="truncate text-base font-semibold">{c.name}</div>
-                      <div className="mt-1 line-clamp-2 text-sm text-white/65">{c.address ?? ""}</div>
-                      <div className="mt-3 text-sm text-white/80">
-                        {c.rating ? `⭐ ${c.rating} (${c.userRatingsTotal ?? 0})` : "No rating yet"}
-                        {c.openNow === true ? " · Open now" : c.openNow === false ? " · Closed" : ""}
-                      </div>
-                    </div>
-                    <div className="rounded-2xl bg-white/10 px-3 py-2 text-xs text-white/70 group-hover:bg-white/15">
-                      View
+                  {showAllCourses ? "Hide all courses" : `Show all ${allCourses.length} courses`}
+                </button>
+
+                {showAllCourses && (
+                  <div className="w-full">
+                    <div className="mb-3 text-sm text-white/60">All nearby courses</div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {restCourses.map((c: any) => (
+                        <CourseCard key={c.placeId} c={c} />
+                      ))}
                     </div>
                   </div>
-                </a>
-              ))}
-            </div>
+                )}
+              </div>
+            )}
           </section>
         )}
 
