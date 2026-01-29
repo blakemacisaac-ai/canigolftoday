@@ -19,6 +19,71 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
+/* ---------- Greens firmness (today-only, v1.2-ish signal) ---------- */
+function getNum(v: any): number | null {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function computeGreensFirmness(weather: any) {
+  const d0 = weather?.daily?.[0] ?? null;
+  const d1 = weather?.daily?.[1] ?? null;
+  const d2 = weather?.daily?.[2] ?? null;
+
+  // Precip totals (field names vary a bit between providers)
+  const p0 =
+    getNum(d0?.precipMm) ??
+    getNum(d0?.precipTotal) ??
+    getNum(d0?.rainMm) ??
+    getNum(d0?.precip) ??
+    0;
+  const p1 =
+    getNum(d1?.precipMm) ??
+    getNum(d1?.precipTotal) ??
+    getNum(d1?.rainMm) ??
+    getNum(d1?.precip) ??
+    0;
+  const p2 =
+    getNum(d2?.precipMm) ??
+    getNum(d2?.precipTotal) ??
+    getNum(d2?.rainMm) ??
+    getNum(d2?.precip) ??
+    0;
+
+  const rainToday = p0;
+  const rain72 = p0 + p1 + p2;
+
+  const overnightLow = getNum(d0?.minTemp);
+  const dayHigh = getNum(d0?.maxTemp);
+  const windKph = getNum(weather?.current?.windKph) ?? getNum(d0?.windMax) ?? getNum(d0?.windKph) ?? null;
+
+  // Directional wetness score (higher = softer)
+  let wetScore = 0;
+
+  // Moisture inputs
+  if (rainToday >= 10) wetScore += 3;
+  else if (rainToday >= 5) wetScore += 2;
+  else if (rainToday >= 1) wetScore += 1;
+
+  if (rain72 >= 15) wetScore += 2;
+  else if (rain72 >= 8) wetScore += 1;
+
+  // Cold nights slow drying (morning dampness / frostier turf)
+  if (overnightLow !== null && overnightLow <= 3) wetScore += 1;
+
+  // Drying inputs
+  if (dayHigh !== null && dayHigh >= 18) wetScore -= 1;
+  if (windKph !== null && windKph >= 20) wetScore -= 1;
+
+  if (wetScore >= 4) {
+    return { key: "SOFT", label: "Greens: 🟢 Soft", detail: "Approaches should hold (more moisture)" };
+  }
+  if (wetScore <= 0) {
+    return { key: "FIRM", label: "Greens: 🔴 Firm", detail: "Expect bounce & rollout (drier)" };
+  }
+  return { key: "NORMAL", label: "Greens: 🟡 Normal", detail: "Typical bounce & rollout" };
+}
+
 /** v1.1: Courses — curate the list (less is more) */
 function scoreCourse(c: any) {
   // Higher is better
@@ -87,51 +152,6 @@ function CourseCard({ c }: { c: any }) {
   );
 }
 
-function formatTimeLabel(d: Date) {
-  // e.g. "6:00 AM"
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-function bestGolfHoursWindowText(daily: any, fallbackBestWindow?: any) {
-  // Only allow golf windows between 06:00 and 18:00
-  const START_HOUR = 6;
-  const END_HOUR = 18;
-
-  const blocks: any[] = Array.isArray(daily?.blocks) ? daily.blocks : [];
-  if (blocks.length === 0) {
-    // If we don't have blocks, keep existing bestWindow if present
-    if (fallbackBestWindow?.startLabel && fallbackBestWindow?.endLabel) {
-      return `${fallbackBestWindow.startLabel} – ${fallbackBestWindow.endLabel} (avg ${fallbackBestWindow.avgScore}/100)`;
-    }
-    return null;
-  }
-
-  // Filter to golfable hours
-  const inHours = blocks.filter((b) => {
-    const dt = typeof b?.dt === "number" ? b.dt : null;
-    if (!dt) return false;
-    const d = new Date(dt * 1000);
-    const h = d.getHours();
-    return h >= START_HOUR && h < END_HOUR;
-  });
-
-  if (inHours.length === 0) return null;
-
-  // Pick the single best-scoring block within golf hours
-  const best = [...inHours].sort((a, b) => (b?.score ?? -1) - (a?.score ?? -1))[0];
-  if (!best || typeof best.dt !== "number") return null;
-
-  const start = new Date(best.dt * 1000);
-  const end = new Date(start.getTime() + 60 * 60 * 1000); // +1 hour
-
-  const score = typeof best.score === "number" ? best.score : null;
-
-  return `${formatTimeLabel(start)} – ${formatTimeLabel(end)}${score !== null ? ` (avg ${score}/100)` : ""}`;
-}
-
-
-
-
 export default function HomePage() {
   const [coords, setCoords] = useState<Coords | null>(null);
   const [geoErr, setGeoErr] = useState<string | null>(null);
@@ -199,27 +219,14 @@ export default function HomePage() {
     return "Not golfable";
   }, [showVerdict]);
 
- const bestWindowText = useMemo(() => {
-  const bw = selectedDaily?.bestWindow ?? weather?.bestTime?.bestWindow;
-
-  // If the API window is already in golf hours, keep it.
-  if (bw?.startLabel && bw?.endLabel) {
-    // crude but effective: if it contains "AM/PM" labels, still might be off.
-    // We'll prefer our computed window whenever blocks exist.
-  }
-
-  // Prefer computed window limited to 6am–6pm if blocks exist
-  const computed = bestGolfHoursWindowText(selectedDaily, bw);
-  if (computed) return computed;
-
-  // fallback to API window if we can't compute
-  if (bw?.startLabel && bw?.endLabel) {
+  const bestWindowText = useMemo(() => {
+    const bw = selectedDaily?.bestWindow ?? weather?.bestTime?.bestWindow;
+    if (!bw?.startLabel || !bw?.endLabel) return null;
     return `${bw.startLabel} – ${bw.endLabel} (avg ${bw.avgScore}/100)`;
-  }
+  }, [selectedDaily, weather]);
 
-  return null;
-}, [selectedDaily, weather]);
-
+  // ✅ FIX: hook is top-level (not inside another hook)
+  const greensFirmness = useMemo(() => computeGreensFirmness(weather), [weather]);
 
   const showScore = teeTimeResult?.score ?? selectedDaily?.golf?.score ?? weather?.golf?.score;
   const showReason = teeTimeResult?.reason ?? selectedDaily?.golf?.reason ?? weather?.golf?.reason;
@@ -544,6 +551,13 @@ export default function HomePage() {
                   <div className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
                     <span className="text-white/70">Best tee-time window</span>
                     <span className="font-semibold">{bestWindowText}</span>
+                  </div>
+                )}
+
+                {selectedDay === 0 && greensFirmness && (
+                  <div className="mt-3 inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
+                    <span className="font-semibold">{greensFirmness.label}</span>
+                    <span className="text-white/60">— {greensFirmness.detail}</span>
                   </div>
                 )}
 
