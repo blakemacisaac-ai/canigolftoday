@@ -554,7 +554,7 @@ export default function HomePage() {
                   </div>
                 )}
 
-                {selectedDay === 0 && greensFirmness && (
+                {selectedDay === 0 && greensFirmness && showVerdict !== "RED" && (
                   <div className="mt-3 inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
                     <span className="font-semibold">{greensFirmness.label}</span>
                     <span className="text-white/60">— {greensFirmness.detail}</span>
