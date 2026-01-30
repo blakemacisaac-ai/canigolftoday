@@ -2,12 +2,20 @@ import { NextResponse } from "next/server";
 
 type Kind = "city" | "course";
 
+type Prediction = {
+  kind: Kind;
+  placeId: string;
+  description: string;
+  name?: string | null;
+  address?: string | null;
+};
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const input = (searchParams.get("q") || "").trim();
 
   if (!input || input.length < 2) {
-    return NextResponse.json({ predictions: [] });
+    return NextResponse.json({ predictions: [] as Prediction[] });
   }
 
   const key = process.env.GOOGLE_PLACES_API_KEY;
@@ -15,15 +23,15 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing GOOGLE_PLACES_API_KEY" }, { status: 500 });
   }
 
-  // 1) Cities-only autocomplete
+  // 1) Cities-only autocomplete (legacy Places Autocomplete endpoint)
   const citiesUrl =
     `https://maps.googleapis.com/maps/api/place/autocomplete/json` +
     `?input=${encodeURIComponent(input)}` +
     `&types=(cities)` +
     `&key=${encodeURIComponent(key)}`;
 
-  // 2) Courses search (Text Search) — better for named course lookup
-  // Uses Places "type=golf_course" and query that includes the user input.
+  // 2) Courses (Places Text Search)
+  // Text Search is better for named course lookup (Torrey Pines, Glen Abbey, etc.)
   const coursesUrl =
     `https://maps.googleapis.com/maps/api/place/textsearch/json` +
     `?query=${encodeURIComponent(input)}` +
@@ -34,7 +42,7 @@ export async function GET(req: Request) {
   const citiesData = await citiesRes.json();
   const coursesData = await coursesRes.json();
 
-  // --- Handle city autocomplete response ---
+  // ---- Cities response handling ----
   if (citiesData.status !== "OK" && citiesData.status !== "ZERO_RESULTS") {
     return NextResponse.json(
       {
@@ -46,8 +54,7 @@ export async function GET(req: Request) {
     );
   }
 
-  // --- Handle course textsearch response ---
-  // Textsearch uses: OK, ZERO_RESULTS, OVER_QUERY_LIMIT, REQUEST_DENIED, INVALID_REQUEST, UNKNOWN_ERROR
+  // ---- Courses response handling ----
   if (coursesData.status !== "OK" && coursesData.status !== "ZERO_RESULTS") {
     return NextResponse.json(
       {
@@ -59,30 +66,28 @@ export async function GET(req: Request) {
     );
   }
 
-  const cityPreds = (citiesData.predictions ?? []).slice(0, 5).map((p: any) => ({
-    kind: "city" as Kind,
-    placeId: p.place_id,
-    description: p.description,
+  const cityPreds: Prediction[] = (citiesData.predictions ?? []).slice(0, 5).map((p: any) => ({
+    kind: "city",
+    placeId: String(p?.place_id ?? ""),
+    description: String(p?.description ?? ""),
   }));
 
-  const coursePreds = (coursesData.results ?? []).slice(0, 5).map((r: any) => ({
-    kind: "course" as Kind,
-    placeId: r.place_id,
-    // Keep this readable and helpful
-    description: `${r.name}${r.formatted_address ? ` — ${r.formatted_address}` : ""}`,
-    name: r.name ?? null,
-    address: r.formatted_address ?? null,
+  const coursePreds: Prediction[] = (coursesData.results ?? []).slice(0, 5).map((r: any) => ({
+    kind: "course",
+    placeId: String(r?.place_id ?? ""),
+    description: `${r?.name ?? "Course"}${r?.formatted_address ? ` — ${r.formatted_address}` : ""}`,
+    name: r?.name ?? null,
+    address: r?.formatted_address ?? null,
   }));
 
-  // Merge with a little dedupe by placeId
+  // Merge + dedupe by placeId (and drop any empties)
   const seen = new Set<string>();
-  const merged = [...coursePreds, ...cityPreds].filter((p: any) => {
-    if (!p?.placeId) return false;
+  const merged = [...coursePreds, ...cityPreds].filter((p) => {
+    if (!p.placeId || !p.description) return false;
     if (seen.has(p.placeId)) return false;
     seen.add(p.placeId);
     return true;
   });
 
-  // Keep dropdown tight
   return NextResponse.json({ predictions: merged.slice(0, 8) });
 }

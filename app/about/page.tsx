@@ -46,7 +46,7 @@ export default function AboutPage() {
         <section className="mt-8 rounded-2xl bg-white/5 p-6 ring-1 ring-white/10">
           <h2 className="text-lg font-semibold">Contact</h2>
           <p className="mt-2 text-sm text-white/70">
-            Want to report a bug, request a feature, suggest a course source — or inquire about advertising opportunities?
+            Want to report a bug, request a feature, or suggest a course source?
           </p>
 
           <div className="mt-4 space-y-2 text-sm">

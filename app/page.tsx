@@ -497,7 +497,7 @@ const sunriseSunsetText = useMemo(() => {
         const raw = Array.isArray(data?.predictions) ? data.predictions : [];
         const normalized = raw
           .map((p: any) => ({
-            kind: (p?.kind === "course" ? "course" : "city") as "city" | "course",
+            kind: p?.kind === "course" || p?.kind === "city" ? p.kind : "city",
             placeId: String(p?.placeId ?? p?.place_id ?? ""),
             description: String(p?.description ?? ""),
           }))
@@ -529,18 +529,34 @@ const sunriseSunsetText = useMemo(() => {
       setGeoErr(null);
       setLoading(true);
 
-      const res = await fetch(`/api/location/resolve?placeId=${encodeURIComponent(p.placeId)}`);
-      const data = await res.json();
+      const placeId = String(p?.placeId ?? "");
+      const url = `/api/location/resolve?placeId=${encodeURIComponent(placeId)}&place_id=${encodeURIComponent(placeId)}`;
+      const res = await fetch(url);
 
-      if (!res.ok || !Number.isFinite(data?.lat) || !Number.isFinite(data?.lon)) {
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        // Likely hitting a 404/HTML response (route not found) or non-JSON error.
+        const text = await res.text().catch(() => "");
+        console.error("Resolve non-JSON response:", res.status, text.slice(0, 200));
+        setGeoErr(`Couldn’t resolve that location. (/api/location/resolve returned ${res.status})`);
+        setLoading(false);
+        return;
+      }
+
+      const lat = data?.lat ?? data?.coords?.lat ?? data?.location?.lat;
+      const lon = data?.lon ?? data?.coords?.lon ?? data?.location?.lon;
+
+      if (!res.ok || !Number.isFinite(lat) || !Number.isFinite(lon)) {
         setGeoErr(data?.error || "Couldn’t resolve that location.");
         setLoading(false);
         return;
       }
 
-      setCityQuery(data?.address || p.description);
+      setCityQuery(data?.address || data?.name || p.description);
 
-      const c = { lat: Number(data.lat), lon: Number(data.lon) };
+      const c = { lat: Number(lat), lon: Number(lon) };
       setCoords(c);
       await loadAll(c);
     } catch {
@@ -594,33 +610,19 @@ const sunriseSunsetText = useMemo(() => {
                 Your tee-time forecast.
               </h1>
               <p className="mt-3 text-white/75">
-                Search a city — we’ll score the conditions, find the best daylight window, and show
-                nearby courses.
+                Search a city or course — we’ll score the conditions and find the best 3‑hour daylight window.
               </p>
-            </div>
-
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={useMyLocation}
-                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
-              >
-                Use my location
-              </button>
-              {coords && (
-                <div className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/80">
-                  {coords.lat.toFixed(3)}, {coords.lon.toFixed(3)}
-                </div>
-              )}
             </div>
           </div>
 
           <section className="mt-8" ref={boxRef}>
             <div className="relative">
+              <div className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-white/45">🔎</div>
               <input
                 value={cityQuery}
                 onChange={(e) => setCityQuery(e.target.value)}
                 placeholder="Search city or course: Guelph, Toronto, Glen Abbey…"
-                className="w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white placeholder:text-white/50 outline-none focus:border-white/25"
+                className="w-full rounded-2xl border border-white/10 bg-white/10 pl-11 pr-4 py-3 text-sm text-white placeholder:text-white/50 outline-none focus:border-white/25"
               />
 
               {predictions.length > 0 && (
@@ -641,6 +643,47 @@ const sunriseSunsetText = useMemo(() => {
               )}
 
               {searching && <div className="mt-2 text-xs text-white/60">Searching…</div>}
+
+            {/* Quick picks + secondary actions */}
+            <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex flex-wrap gap-2">
+                {[
+                  "Toronto",
+                  "Myrtle Beach",
+                  "Scottsdale",
+                  "Pebble Beach",
+                  "Cabot Cliffs",
+                ].map((label) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => setCityQuery(label)}
+                    className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 ring-1 ring-white/10 hover:bg-white/15"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={useMyLocation}
+                  className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-semibold text-white/90 ring-1 ring-white/10 hover:bg-white/15 transition"
+                >
+                  Use my location
+                </button>
+                {coords && (
+                  <div className="rounded-2xl bg-white/5 px-4 py-2 text-sm text-white/70 ring-1 ring-white/10">
+                    {coords.lat.toFixed(3)}, {coords.lon.toFixed(3)}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3 text-xs text-white/50">
+              Always confirm course status (frost delays, closures, bookings).
+            </div>
             </div>
 
             {geoErr && (
@@ -653,6 +696,36 @@ const sunriseSunsetText = useMemo(() => {
       </div>
 
       <div className="mx-auto max-w-5xl px-6 pb-16 pt-8">
+        {!loading && !(weather?.golf || selectedDaily?.golf) && (
+          <section className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-3xl bg-white/5 p-5 ring-1 ring-white/10">
+              <div className="text-sm font-semibold text-white/90">How it works</div>
+              <div className="mt-2 text-sm text-white/70">
+                We blend temperature, wind, precipitation, and daylight to give a simple golf‑day score.
+              </div>
+            </div>
+            <div className="rounded-3xl bg-white/5 p-5 ring-1 ring-white/10">
+              <div className="text-sm font-semibold text-white/90">What the score means</div>
+              <div className="mt-2 text-sm text-white/70">
+                Green = send it. Yellow = playable with tradeoffs. Red = rough conditions.
+              </div>
+            </div>
+            <div className="rounded-3xl bg-white/5 p-5 ring-1 ring-white/10">
+              <div className="text-sm font-semibold text-white/90">Support the site</div>
+              <div className="mt-2 text-sm text-white/70">
+                If this saves you a wasted drive, the coffee button on the About page helps cover hosting + APIs.
+              </div>
+              <div className="mt-3">
+                <Link
+                  href="/about"
+                  className="inline-flex items-center rounded-2xl bg-white/10 px-4 py-2 text-sm font-semibold text-white/90 ring-1 ring-white/10 hover:bg-white/15 transition"
+                >
+                  Learn more
+                </Link>
+              </div>
+            </div>
+          </section>
+        )}
         {loading && <div className="text-white/70">Loading…</div>}
 
         {(weather?.golf || selectedDaily?.golf) && (
@@ -677,7 +750,7 @@ const sunriseSunsetText = useMemo(() => {
                     )}
 
                     {showVerdict === "RED" && redReasonChips.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-2">
+                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
                         {redReasonChips.map((c) => (
                           <Chip key={c}>{c}</Chip>
                         ))}
@@ -687,26 +760,32 @@ const sunriseSunsetText = useMemo(() => {
                 </div>
 
                 
-{(bestWindowText || sunriseSunsetText) && (
-  <div className="mt-4 inline-flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
+{(bestWindowText || sunriseSunsetText || (selectedDay === 0 && greensFirmness && showVerdict !== "RED")) && (
+  <div className="mt-4 flex flex-wrap gap-2">
     {bestWindowText && (
-      <>
-        <span className="text-white/70">Best tee-time window</span>
+      <div className="inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85 ring-1 ring-white/10">
+        <span className="text-white/60">Best window</span>
         <span className="font-semibold">{bestWindowText}</span>
-      </>
+      </div>
     )}
+
     {sunriseSunsetText && (
-      <span className="text-white/60">{sunriseSunsetText}</span>
+      <div className="inline-flex items-center gap-2 rounded-2xl bg-white/5 px-4 py-2 text-sm text-white/80 ring-1 ring-white/10">
+        <span className="text-white/60">🌅/🌇</span>
+        <span className="min-w-0">{sunriseSunsetText}</span>
+        <span className="text-white/50">(local course time)</span>
+      </div>
+    )}
+
+    {selectedDay === 0 && greensFirmness && showVerdict !== "RED" && (
+      <div className="inline-flex items-center gap-2 rounded-2xl bg-white/5 px-4 py-2 text-sm text-white/80 ring-1 ring-white/10">
+        <span className="text-white/60">Greens</span>
+        <span className="font-semibold">{greensFirmness.label}</span>
+        <span className="text-white/55">— {greensFirmness.detail}</span>
+      </div>
     )}
   </div>
 )}
-
-                {selectedDay === 0 && greensFirmness && showVerdict !== "RED" && (
-                  <div className="mt-3 inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
-                    <span className="font-semibold">{greensFirmness.label}</span>
-                    <span className="text-white/60">— {greensFirmness.detail}</span>
-                  </div>
-                )}
 
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <div className="text-sm text-white/70">Tee time (optional)</div>
@@ -741,7 +820,7 @@ const sunriseSunsetText = useMemo(() => {
                 {Array.isArray(weather?.daily) && weather.daily.length > 0 && (
                   <div className="mt-5">
                     <div className="text-xs font-semibold text-white/60">Next 5 days</div>
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
                       {weather.daily.slice(0, 5).map((d: any, idx: number) => {
                         const v = d?.golf?.verdict;
                         const dot = v === "GREEN" ? "🟢" : v === "YELLOW" ? "🟡" : "🔴";

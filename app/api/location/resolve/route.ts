@@ -1,47 +1,77 @@
 import { NextResponse } from "next/server";
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const placeId = searchParams.get("placeId");
+  try {
+    const { searchParams } = new URL(req.url);
 
-  if (!placeId) {
-    return NextResponse.json({ error: "Missing placeId" }, { status: 400 });
-  }
+    // Accept either param name
+    const placeId =
+      (searchParams.get("placeId") || searchParams.get("place_id") || "").trim();
 
-  const key = process.env.GOOGLE_PLACES_API_KEY;
-  if (!key) {
-    return NextResponse.json({ error: "Missing GOOGLE_PLACES_API_KEY" }, { status: 500 });
-  }
+    if (!placeId) {
+      return NextResponse.json({ error: "Missing placeId" }, { status: 400 });
+    }
 
-  const url =
-    `https://maps.googleapis.com/maps/api/place/details/json` +
-    `?place_id=${encodeURIComponent(placeId)}` +
-    `&fields=${encodeURIComponent("geometry,name,formatted_address")}` +
-    `&key=${encodeURIComponent(key)}`;
+    const key = process.env.GOOGLE_PLACES_API_KEY;
+    if (!key) {
+      return NextResponse.json({ error: "Missing GOOGLE_PLACES_API_KEY" }, { status: 500 });
+    }
 
-  const res = await fetch(url);
-  const data = await res.json();
+    // Place Details API (v1)
+    // NOTE: This is the correct way to resolve an autocomplete place_id to coordinates.
+    const url =
+      "https://places.googleapis.com/v1/places/" +
+      encodeURIComponent(placeId) +
+      "?fields=location,formattedAddress,displayName";
 
-  if (data.status !== "OK") {
-    return NextResponse.json(
-      {
-        error: "Places details error",
-        googleStatus: data.status,
-        googleError: data.error_message ?? null,
+    const r = await fetch(url, {
+      headers: {
+        "X-Goog-Api-Key": key,
+        // (optional) for quota attribution if you have one
+        // "X-Goog-FieldMask": "location,formattedAddress,displayName",
       },
-      { status: 502 }
+      cache: "no-store",
+    });
+
+    const data = await r.json();
+
+    if (!r.ok) {
+      return NextResponse.json(
+        {
+          error: "Place details lookup failed",
+          status: r.status,
+          google: data,
+        },
+        { status: 502 }
+      );
+    }
+
+    const lat = data?.location?.latitude;
+    const lon = data?.location?.longitude;
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return NextResponse.json(
+        { error: "No coordinates returned for placeId", google: data },
+        { status: 502 }
+      );
+    }
+
+    const address =
+      data?.formattedAddress ||
+      data?.displayName?.text ||
+      data?.displayName ||
+      null;
+
+    return NextResponse.json({
+      lat,
+      lon,
+      address,
+      placeId,
+    });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: "Resolve route crashed", detail: e?.message || String(e) },
+      { status: 500 }
     );
   }
-
-  const loc = data?.result?.geometry?.location;
-  if (!loc?.lat || !loc?.lng) {
-    return NextResponse.json({ error: "No geometry returned for placeId" }, { status: 502 });
-  }
-
-  return NextResponse.json({
-    name: data?.result?.name ?? null,
-    address: data?.result?.formatted_address ?? null,
-    lat: Number(loc.lat),
-    lon: Number(loc.lng),
-  });
 }
