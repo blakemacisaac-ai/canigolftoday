@@ -28,17 +28,30 @@ function msToKph(ms: number) {
   return ms * 3.6;
 }
 
-function formatTime(dt: number) {
-  return new Date(dt * 1000).toLocaleTimeString([], {
+function formatTime(dt: number, tzOffsetSec = 0) {
+  // OpenWeather timestamps are unix seconds in UTC.
+  // tzOffsetSec is the location's UTC offset in seconds.
+  // We shift the timestamp and then format in UTC so we don't accidentally use the server/user timezone.
+  return new Date((dt + tzOffsetSec) * 1000).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "UTC",
   });
 }
 
-function formatDay(dt: number) {
-  return new Date(dt * 1000).toLocaleDateString([], {
+function formatDay(dt: number, tzOffsetSec = 0) {
+  return new Date((dt + tzOffsetSec) * 1000).toLocaleDateString([], {
     weekday: "short",
+    timeZone: "UTC",
   });
+}
+
+function dayKey(dt: number, tzOffsetSec = 0) {
+  return new Date((dt + tzOffsetSec) * 1000).toISOString().split("T")[0];
+}
+
+function localHour(dt: number, tzOffsetSec = 0) {
+  return new Date((dt + tzOffsetSec) * 1000).getUTCHours();
 }
 
 export async function GET(req: Request) {
@@ -70,8 +83,10 @@ export async function GET(req: Request) {
   const sunrise = Number(current.sys?.sunrise ?? 0);
   const sunset = Number(current.sys?.sunset ?? 0);
 
-  // Month-based season logic used by golfabilityScore
-  const nowMonth = new Date().getMonth();
+
+  const tzOffsetSec = Number(forecast.city?.timezone ?? current.timezone ?? 0);
+  // Month-based season logic used by golfabilityScore (use location-local date)
+  const nowMonth = new Date((Date.now() / 1000 + tzOffsetSec) * 1000).getUTCMonth();
 
   // "Golf daylight": 1 hour after sunrise to 1 hour before sunset
   const daylightStart = sunrise + 60 * 60;
@@ -101,9 +116,9 @@ export async function GET(req: Request) {
 
     return {
       dt,
-      label: formatTime(dt),
-      dayKey: new Date(dt * 1000).toISOString().split("T")[0],
-      dayLabel: formatDay(dt),
+      label: formatTime(dt, tzOffsetSec),
+      dayKey: dayKey(dt, tzOffsetSec),
+      dayLabel: formatDay(dt, tzOffsetSec),
       temp: Math.round(b.main.temp),
       feels: Math.round(b.main.feels_like),
       windKph: Math.round(wind),
@@ -116,7 +131,7 @@ export async function GET(req: Request) {
   });
 
   // ---------- TODAY: best daylight block + best daylight window ----------
-  const todayKey = new Date().toISOString().split("T")[0];
+  const todayKey = dayKey(Date.now() / 1000, tzOffsetSec);
   const todayAll = blocks.filter((b) => b.dayKey === todayKey);
   const todayDaylight = todayAll.filter((b) => b.inDaylight);
 
@@ -124,7 +139,7 @@ export async function GET(req: Request) {
   // show a 3-hour "best window" that STARTS between 6am and 3pm,
   // so the window ends by 6pm.
   const isInTeeWindow = (dt: number) => {
-    const hr = new Date(dt * 1000).getHours();
+    const hr = localHour(dt, tzOffsetSec);
     return hr >= 6 && hr <= 15;
   };
 
@@ -142,7 +157,7 @@ export async function GET(req: Request) {
   const bestWindow = bestTodayBlock
     ? {
         startLabel: bestTodayBlock.label,
-        endLabel: formatTime(bestTodayBlock.dt + 3 * 60 * 60),
+        endLabel: formatTime(bestTodayBlock.dt + 3 * 60 * 60, tzOffsetSec),
         avgScore: bestTodayBlock.golf.score,
       }
     : null;
@@ -185,7 +200,7 @@ export async function GET(req: Request) {
     const dayBestWindow = dayBestBlock
       ? {
           startLabel: dayBestBlock.label,
-          endLabel: formatTime(dayBestBlock.dt + 3 * 60 * 60),
+          endLabel: formatTime(dayBestBlock.dt + 3 * 60 * 60, tzOffsetSec),
           avgScore: dayBestBlock.golf.score,
         }
       : null;
@@ -247,10 +262,10 @@ export async function GET(req: Request) {
     daylight: {
       sunrise,
       sunset,
-      sunriseLabel: formatTime(sunrise),
-      sunsetLabel: formatTime(sunset),
-      daylightStartLabel: formatTime(daylightStart),
-      daylightEndLabel: formatTime(daylightEnd),
+      sunriseLabel: formatTime(sunrise, tzOffsetSec),
+      sunsetLabel: formatTime(sunset, tzOffsetSec),
+      daylightStartLabel: formatTime(daylightStart, tzOffsetSec),
+      daylightEndLabel: formatTime(daylightEnd, tzOffsetSec),
     },
 
     forecast: blocks,

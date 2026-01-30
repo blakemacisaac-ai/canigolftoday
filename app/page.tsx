@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 type Coords = { lat: number; lon: number };
-type Prediction = { placeId: string; description: string };
+type Prediction = { kind: "city" | "course"; placeId: string; description: string };
+
 
 function verdictStyles(verdict?: string) {
   if (verdict === "GREEN") return { dot: "🟢", pill: "bg-emerald-600", ring: "ring-emerald-200" };
@@ -492,7 +493,17 @@ const sunriseSunsetText = useMemo(() => {
         setSearching(true);
         const res = await fetch(`/api/location/suggest?q=${encodeURIComponent(q)}`);
         const data = await res.json();
-        setPredictions(Array.isArray(data?.predictions) ? data.predictions : []);
+        {
+        const raw = Array.isArray(data?.predictions) ? data.predictions : [];
+        const normalized = raw
+          .map((p: any) => ({
+            kind: (p?.kind === "course" ? "course" : "city") as "city" | "course",
+            placeId: String(p?.placeId ?? p?.place_id ?? ""),
+            description: String(p?.description ?? ""),
+          }))
+          .filter((p: any) => p.placeId && p.description);
+        setPredictions(normalized);
+      }
       } catch {
         setPredictions([]);
       } finally {
@@ -522,7 +533,7 @@ const sunriseSunsetText = useMemo(() => {
       const data = await res.json();
 
       if (!res.ok || !Number.isFinite(data?.lat) || !Number.isFinite(data?.lon)) {
-        setGeoErr(data?.error || "Couldn’t resolve that city.");
+        setGeoErr(data?.error || "Couldn’t resolve that location.");
         setLoading(false);
         return;
       }
@@ -533,7 +544,7 @@ const sunriseSunsetText = useMemo(() => {
       setCoords(c);
       await loadAll(c);
     } catch {
-      setGeoErr("Couldn’t resolve that city.");
+      setGeoErr("Couldn’t resolve that location.");
       setLoading(false);
     }
   }
@@ -608,7 +619,7 @@ const sunriseSunsetText = useMemo(() => {
               <input
                 value={cityQuery}
                 onChange={(e) => setCityQuery(e.target.value)}
-                placeholder="Search city: Guelph, Toronto, Myrtle Beach…"
+                placeholder="Search city or course: Guelph, Toronto, Glen Abbey…"
                 className="w-full rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white placeholder:text-white/50 outline-none focus:border-white/25"
               />
 
@@ -618,9 +629,12 @@ const sunriseSunsetText = useMemo(() => {
                     <button
                       key={p.placeId}
                       onClick={() => choosePrediction(p)}
-                      className="block w-full px-4 py-3 text-left text-sm text-white/90 hover:bg-white/5"
+                      className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-white/5"
                     >
-                      {p.description}
+                      <span className="mt-0.5 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white/80">
+                        {p.kind === "course" ? "Course" : "City"}
+                      </span>
+                      <span className="min-w-0 text-sm text-white/90">{p.description}</span>
                     </button>
                   ))}
                 </div>
