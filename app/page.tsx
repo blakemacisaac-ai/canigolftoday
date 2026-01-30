@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 
 type Coords = { lat: number; lon: number };
 type Prediction = { placeId: string; description: string };
@@ -23,6 +24,71 @@ function Chip({ children }: { children: React.ReactNode }) {
 function getNum(v: any): number | null {
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+
+function asTimeLabel(v: any): string | null {
+  if (v == null) return null;
+
+  // Already a readable label like "7:12 AM" or "07:12"
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+
+    // If it's an ISO string, try to format
+    if (s.includes("T")) {
+      const d = new Date(s);
+      if (!Number.isNaN(d.getTime())) {
+        return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      }
+    }
+
+    // Otherwise assume it's already a label
+    return s;
+  }
+
+  // Unix epoch seconds or ms
+  if (typeof v === "number" && Number.isFinite(v)) {
+    const ms = v > 1e12 ? v : v * 1000;
+    const d = new Date(ms);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    }
+  }
+
+  return null;
+}
+
+
+/* ---------- Yardage estimate (carry change) ---------- */
+function estimateCarryChangeYards({
+  tempC,
+  verdict,
+}: {
+  tempC?: number | null;
+  verdict?: "GREEN" | "YELLOW" | "RED" | string | null;
+}): { minYds: number; maxYds: number } | null {
+  // Don't show on RED days
+  if (verdict === "RED") return null;
+
+  const BASE_TEMP_C = 20;
+  if (tempC == null) return null;
+
+  const deltaC = tempC - BASE_TEMP_C;
+
+  // Simple, golfer-friendly rule of thumb:
+  // ~1–2 yards per 5°C change in temperature (carry estimate).
+  const a = (deltaC / 5) * 1;
+  const b = (deltaC / 5) * 2;
+
+  const r = (n: number) => Math.round(n);
+  const minYds = r(Math.min(a, b));
+  const maxYds = r(Math.max(a, b));
+
+  // Hide tiny/noisy changes
+  if (Math.max(Math.abs(minYds), Math.abs(maxYds)) < 2) return null;
+
+  return { minYds, maxYds };
 }
 
 function computeGreensFirmness(weather: any) {
@@ -219,11 +285,59 @@ export default function HomePage() {
     return "Not golfable";
   }, [showVerdict]);
 
+
+  const carryChange = useMemo(() => {
+    if (showVerdict === "RED") return null;
+
+    // Prefer day-specific values; fall back to current conditions for today
+    const t =
+      selectedDay === 0
+        ? getNum(weather?.current?.temp) ?? getNum(weather?.current?.feels) ?? null
+        : getNum(selectedDaily?.maxTemp) ?? getNum(selectedDaily?.max) ?? null;
+
+    return estimateCarryChangeYards({ tempC: t, verdict: showVerdict });
+  }, [showVerdict, selectedDay, selectedDaily, weather]);
+
+  const carryChangeText = useMemo(() => {
+    if (!carryChange) return null;
+    const min = carryChange.minYds;
+    const max = carryChange.maxYds;
+
+    const fmt = (n: number) => `${n > 0 ? "+" : ""}${n}`;
+    if (min === max) return `${fmt(min)} yds`;
+    return `${fmt(min)} to ${fmt(max)} yds`;
+  }, [carryChange]);
+
   const bestWindowText = useMemo(() => {
     const bw = selectedDaily?.bestWindow ?? weather?.bestTime?.bestWindow;
     if (!bw?.startLabel || !bw?.endLabel) return null;
     return `${bw.startLabel} – ${bw.endLabel} (avg ${bw.avgScore}/100)`;
   }, [selectedDaily, weather]);
+
+const sunriseSunsetText = useMemo(() => {
+  // Try a few likely shapes from your /api/weather response
+  const sunrise =
+    asTimeLabel(selectedDaily?.sunriseLabel) ??
+    asTimeLabel(selectedDaily?.sunrise) ??
+    asTimeLabel(selectedDaily?.sun?.sunrise) ??
+    asTimeLabel(weather?.sunriseLabel) ??
+    asTimeLabel(weather?.sunrise) ??
+    asTimeLabel(weather?.sun?.sunrise);
+
+  const sunset =
+    asTimeLabel(selectedDaily?.sunsetLabel) ??
+    asTimeLabel(selectedDaily?.sunset) ??
+    asTimeLabel(selectedDaily?.sun?.sunset) ??
+    asTimeLabel(weather?.sunsetLabel) ??
+    asTimeLabel(weather?.sunset) ??
+    asTimeLabel(weather?.sun?.sunset);
+
+  if (!sunrise && !sunset) return null;
+  if (sunrise && sunset) return `Sunrise ${sunrise} • Sunset ${sunset}`;
+  if (sunrise) return `Sunrise ${sunrise}`;
+  return `Sunset ${sunset}`;
+}, [selectedDaily, weather]);
+
 
   // ✅ FIX: hook is top-level (not inside another hook)
   const greensFirmness = useMemo(() => computeGreensFirmness(weather), [weather]);
@@ -448,6 +562,15 @@ export default function HomePage() {
         <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/50 to-[#0b0f14]" />
 
         <div className="relative mx-auto max-w-5xl px-6 pb-10 pt-10">
+		{/* About button – safe, non-intrusive */}
+  <div className="absolute right-6 top-6 z-50">
+    <Link
+      href="/about"
+      className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-semibold text-white/90 ring-1 ring-white/10 hover:bg-white/15 transition"
+    >
+      About
+    </Link>
+  </div>
           <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
             <div className="max-w-2xl">
               <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs text-white/80">
@@ -547,12 +670,20 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                {bestWindowText && (
-                  <div className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
-                    <span className="text-white/70">Best tee-time window</span>
-                    <span className="font-semibold">{bestWindowText}</span>
-                  </div>
-                )}
+                
+{(bestWindowText || sunriseSunsetText) && (
+  <div className="mt-4 inline-flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
+    {bestWindowText && (
+      <>
+        <span className="text-white/70">Best tee-time window</span>
+        <span className="font-semibold">{bestWindowText}</span>
+      </>
+    )}
+    {sunriseSunsetText && (
+      <span className="text-white/60">{sunriseSunsetText}</span>
+    )}
+  </div>
+)}
 
                 {selectedDay === 0 && greensFirmness && showVerdict !== "RED" && (
                   <div className="mt-3 inline-flex items-center gap-2 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
@@ -648,6 +779,14 @@ export default function HomePage() {
                         </span>
                       </span>
                     </div>
+
+                    {carryChangeText && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">Carry change</span>
+                        <span>{carryChangeText}</span>
+                      </div>
+                    )}
+
                     {weather?.current?.conditions && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Conditions</span>
@@ -667,6 +806,14 @@ export default function HomePage() {
                       <span className="text-white/60">Max wind</span>
                       <span>{selectedDaily?.windMax ?? "—"} km/h</span>
                     </div>
+
+                    {carryChangeText && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">Carry change</span>
+                        <span>{carryChangeText}</span>
+                      </div>
+                    )}
+
                     {selectedDaily?.conditions && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Conditions</span>
