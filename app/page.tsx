@@ -315,28 +315,30 @@ export default function HomePage() {
   }, [selectedDaily, weather]);
 
 const sunriseSunsetText = useMemo(() => {
-  // Try a few likely shapes from your /api/weather response
   const sunrise =
-    asTimeLabel(selectedDaily?.sunriseLabel) ??
-    asTimeLabel(selectedDaily?.sunrise) ??
-    asTimeLabel(selectedDaily?.sun?.sunrise) ??
-    asTimeLabel(weather?.sunriseLabel) ??
-    asTimeLabel(weather?.sunrise) ??
-    asTimeLabel(weather?.sun?.sunrise);
+    weather?.daylight?.sunriseLabel ??
+    (weather?.daylight?.sunrise
+      ? new Date(weather.daylight.sunrise * 1000).toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : null);
 
   const sunset =
-    asTimeLabel(selectedDaily?.sunsetLabel) ??
-    asTimeLabel(selectedDaily?.sunset) ??
-    asTimeLabel(selectedDaily?.sun?.sunset) ??
-    asTimeLabel(weather?.sunsetLabel) ??
-    asTimeLabel(weather?.sunset) ??
-    asTimeLabel(weather?.sun?.sunset);
+    weather?.daylight?.sunsetLabel ??
+    (weather?.daylight?.sunset
+      ? new Date(weather.daylight.sunset * 1000).toLocaleTimeString([], {
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : null);
 
   if (!sunrise && !sunset) return null;
   if (sunrise && sunset) return `Sunrise ${sunrise} • Sunset ${sunset}`;
   if (sunrise) return `Sunrise ${sunrise}`;
   return `Sunset ${sunset}`;
-}, [selectedDaily, weather]);
+}, [weather?.daylight]);
+
 
 
   // ✅ FIX: hook is top-level (not inside another hook)

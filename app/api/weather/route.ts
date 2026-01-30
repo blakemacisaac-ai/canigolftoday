@@ -120,21 +120,32 @@ export async function GET(req: Request) {
   const todayAll = blocks.filter((b) => b.dayKey === todayKey);
   const todayDaylight = todayAll.filter((b) => b.inDaylight);
 
+  // Tee-time window constraints (local server time):
+  // show a 3-hour "best window" that STARTS between 6am and 3pm,
+  // so the window ends by 6pm.
+  const isInTeeWindow = (dt: number) => {
+    const hr = new Date(dt * 1000).getHours();
+    return hr >= 6 && hr <= 15;
+  };
+
+  const todayTeeBlocks = (todayDaylight.length > 0 ? todayDaylight : todayAll).filter((b) =>
+    isInTeeWindow(b.dt)
+  );
+
   const bestTodayBlock =
-    todayDaylight.length > 0
-      ? todayDaylight.reduce((a, b) => (b.golf.score > a.golf.score ? b : a))
+    todayTeeBlocks.length > 0
+      ? todayTeeBlocks.reduce((a, b) => (b.golf.score > a.golf.score ? b : a))
       : null;
 
-  let bestWindow: { startLabel: string; endLabel: string; avgScore: number } | null = null;
-  for (let i = 0; i < todayDaylight.length - 1; i++) {
-    const a = todayDaylight[i];
-    const b = todayDaylight[i + 1];
-    const avg = Math.round((a.golf.score + b.golf.score) / 2);
-
-    if (!bestWindow || avg > bestWindow.avgScore) {
-      bestWindow = { startLabel: a.label, endLabel: b.label, avgScore: avg };
-    }
-  }
+  // Best 3-hour window (single OpenWeather 3h block) between 6am and 6pm.
+  // If there are no eligible blocks, keep it null.
+  const bestWindow = bestTodayBlock
+    ? {
+        startLabel: bestTodayBlock.label,
+        endLabel: formatTime(bestTodayBlock.dt + 3 * 60 * 60),
+        avgScore: bestTodayBlock.golf.score,
+      }
+    : null;
 
   // ---------- GROUP into days (next 5 unique day keys) ----------
   const grouped: Record<string, ForecastBlock[]> = {};
@@ -167,17 +178,17 @@ export async function GET(req: Request) {
 
     const verdict: GolfVerdict = avg >= 80 ? "GREEN" : avg >= 55 ? "YELLOW" : "RED";
 
-    // Best window for THIS day (daylight only if possible)
-    let dayBestWindow: { startLabel: string; endLabel: string; avgScore: number } | null = null;
-    for (let i = 0; i < scoreBlocks.length - 1; i++) {
-      const a = scoreBlocks[i];
-      const b = scoreBlocks[i + 1];
-      const windowAvg = Math.round((a.golf.score + b.golf.score) / 2);
-
-      if (!dayBestWindow || windowAvg > dayBestWindow.avgScore) {
-        dayBestWindow = { startLabel: a.label, endLabel: b.label, avgScore: windowAvg };
-      }
-    }
+    // Best window for THIS day: 3-hour block between 6am and 6pm.
+    const teeBlocks = scoreBlocks.filter((b) => isInTeeWindow(b.dt));
+    const dayBestBlock =
+      teeBlocks.length > 0 ? teeBlocks.reduce((a, b) => (b.golf.score > a.golf.score ? b : a)) : null;
+    const dayBestWindow = dayBestBlock
+      ? {
+          startLabel: dayBestBlock.label,
+          endLabel: formatTime(dayBestBlock.dt + 3 * 60 * 60),
+          avgScore: dayBestBlock.golf.score,
+        }
+      : null;
 
     return {
       dateKey: key,
