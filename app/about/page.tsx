@@ -52,8 +52,8 @@ export default function AboutPage() {
           <div className="mt-4 space-y-2 text-sm">
             <div>
               <span className="text-white/60">Email:</span>{" "}
-              <a className="underline underline-offset-4 hover:text-white" href="mailto:blakemacisaac@gmail.com">
-                blakemacisaac@gmail.com
+              <a className="underline underline-offset-4 hover:text-white" href="">
+                
               </a>
             </div>
           </div>
