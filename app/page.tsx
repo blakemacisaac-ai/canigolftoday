@@ -13,6 +13,34 @@ function verdictStyles(verdict?: string) {
   return { dot: "🔴", pill: "bg-rose-600", ring: "ring-rose-200" };
 }
 
+// Semantic color for greens/rollout badges
+// "Quick" / "High" rollout = good for firm, fast conditions = neutral/amber (informational, not bad)
+// "Slow" / "Low" rollout = soft/wet = blue-ish neutral
+function groundBadgeStyle(label: string | null): React.CSSProperties {
+  if (!label) return { background: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.7)" };
+  const l = label.toLowerCase();
+  if (l.includes("quick") || l.includes("fast")) 
+    return { background: "rgba(245,158,11,0.2)", color: "rgb(252,211,77)" };
+  if (l.includes("slow"))  
+    return { background: "rgba(14,165,233,0.2)", color: "rgb(125,211,252)" };
+  if (l.includes("high"))  
+    return { background: "rgba(245,158,11,0.2)", color: "rgb(252,211,77)" };
+  if (l.includes("low"))   
+    return { background: "rgba(14,165,233,0.2)", color: "rgb(125,211,252)" };
+  return { background: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.7)" };
+}
+
+// Extract just the text word from a label like "Quick" stripping any leading emoji/dots
+function cleanGroundLabel(label: string | null): string {
+  if (!label) return "";
+  return label
+    .replace(/^Greens speed:\s*/i, "")
+    .replace(/^Fairway rollout:\s*/i, "")
+    .replace(/\p{Emoji}/gu, "")
+    .replace(/[●•·\s]+/g, " ")
+    .trim();
+}
+
 function Chip({ children }: { children: React.ReactNode }) {
   return (
     <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/80">
@@ -273,6 +301,7 @@ export default function HomePage() {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [searching, setSearching] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const suppressAutocomplete = useRef(false);
 
   // Selected day (0..4)
   const [selectedDay, setSelectedDay] = useState<number>(0);
@@ -393,8 +422,32 @@ export default function HomePage() {
     return r ? String(r).replace(/^Fairway rollout:\s*/i, "") : null;
   }, [selectedDay, selectedDaily, weather]);
 
+  // Infer timezone offset — shared by bestWindowText and playOut.
+  // API sometimes omits tzOffsetSec; derive from bestWindow startDt + startLabel when missing.
+  const inferredTzOffsetSec = useMemo(() => {
+    if (typeof weather?.tzOffsetSec === "number") return weather.tzOffsetSec;
+    const bw = weather?.bestTime?.bestWindow ?? weather?.daily?.[0]?.bestWindow ?? null;
+    if (bw?.startDt && bw?.startLabel) {
+      const match = String(bw.startLabel).match(/(\d+):(\d+)\s*(a\.?m\.?|p\.?m\.?)/i);
+      if (match) {
+        let h = parseInt(match[1]);
+        const m = parseInt(match[2]);
+        const ampm = match[3].toLowerCase().replace(/\./g, '');
+        if (ampm === 'pm' && h !== 12) h += 12;
+        if (ampm === 'am' && h === 12) h = 0;
+        const localSecs = h * 3600 + m * 60;
+        const utcSecs = bw.startDt % (24 * 3600);
+        let offset = localSecs - utcSecs;
+        while (offset > 43200) offset -= 86400;
+        while (offset < -43200) offset += 86400;
+        return offset;
+      }
+    }
+    return 0;
+  }, [weather]);
+
   const bestWindowText = useMemo(() => {
-  const tzOffsetSec = typeof weather?.tzOffsetSec === "number" ? weather.tzOffsetSec : 0;
+  const tzOffsetSec = inferredTzOffsetSec;
 
   // Format a unix dt in the destination/course timezone (not the viewer's browser timezone).
   const fmt = (dtSec: number) =>
@@ -506,22 +559,43 @@ export default function HomePage() {
     }
   }
   
-  // 3) Final fallback: if we still don't have a window, create a generic morning window
-  if (startDt == null && isToday) {
-    
-    // Create a generic morning window (8am-11am) in destination timezone
-    // Get today's date at midnight UTC
+  // 3) Final fallback: if we still don't have a window, create a window based on best bucket
+  if (startDt == null) {
     const nowUtc = Math.floor(Date.now() / 1000);
-    const todayMidnightUtc = Math.floor(nowUtc / (24 * 60 * 60)) * (24 * 60 * 60);
+
+    // Determine which hour to use based on best bucket from API golf data
+    const golf = isToday ? (weather?.golf ?? weather?.daily?.[0]?.golf) : selectedDaily?.golf;
+    const bestBucket: string | null = golf?.bestBucket ?? golf?.bestPeriod ?? null;
     
-    // 8am in destination timezone
-    const morningStart = todayMidnightUtc + (8 * 60 * 60) - tzOffsetSec;
-    
-    
-    if (isValidStart(morningStart)) {
-      startDt = morningStart;
-      endDt = morningStart + 3 * 60 * 60;
+    // Map bucket to a representative start hour in destination local time
+    let bestHour = 11; // default: midday
+    if (bestBucket === "morning") bestHour = 8;
+    else if (bestBucket === "midday") bestHour = 11;
+    else if (bestBucket === "late" || bestBucket === "afternoon") bestHour = 15;
+
+    // For today use current date, for future days use the daily date if available
+    let dayMidnightUtc: number;
+    if (isToday) {
+      dayMidnightUtc = Math.floor(nowUtc / (24 * 60 * 60)) * (24 * 60 * 60);
     } else {
+      const dateKey = selectedDaily?.dateKey ?? selectedDaily?.date ?? null;
+      if (dateKey) {
+        const d = new Date(dateKey);
+        dayMidnightUtc = Math.floor(d.getTime() / 1000 / (24 * 60 * 60)) * (24 * 60 * 60);
+      } else {
+        dayMidnightUtc = Math.floor(nowUtc / (24 * 60 * 60)) * (24 * 60 * 60) + selectedDay * 24 * 60 * 60;
+      }
+    }
+
+    // Try best bucket first, then fall back through options
+    const candidates = [bestHour, 11, 8, 15].filter((v, i, a) => a.indexOf(v) === i);
+    for (const hour of candidates) {
+      const candidate = dayMidnightUtc + (hour * 60 * 60) - tzOffsetSec;
+      if (isValidStart(candidate)) {
+        startDt = candidate;
+        endDt = candidate + 3 * 60 * 60;
+        break;
+      }
     }
   }
 
@@ -556,7 +630,7 @@ export default function HomePage() {
   const result = `${startStr} – ${endStr}${avgSuffix}`;
   
   return result;
-}, [selectedDaily, selectedDay, weather]);
+}, [selectedDaily, selectedDay, weather, inferredTzOffsetSec]);
 
 const shareText = useMemo(() => {
     const score = teeTimeResult?.score ?? selectedDaily?.golf?.score ?? weather?.golf?.score ?? null;
@@ -579,11 +653,20 @@ const shareText = useMemo(() => {
   const carryChange = useMemo(() => {
     if (showVerdict === "RED") return null;
 
-    // Prefer day-specific values; fall back to current conditions for today
+    // For today: prefer current temp, fall back to day0 min/max avg
+    // For future days: use average of min/max as a better representative temp than just max
     const t =
       selectedDay === 0
-        ? getNum(weather?.current?.temp) ?? getNum(weather?.current?.feels) ?? null
-        : getNum(selectedDaily?.maxTemp) ?? getNum(selectedDaily?.max) ?? null;
+        ? getNum(weather?.current?.temp) ??
+          getNum(weather?.current?.feels) ??
+          getNum(weather?.daily?.[0]?.minTemp) ??
+          null
+        : (() => {
+            const hi = getNum(selectedDaily?.maxTemp) ?? getNum(selectedDaily?.max);
+            const lo = getNum(selectedDaily?.minTemp) ?? getNum(selectedDaily?.min);
+            if (hi != null && lo != null) return (hi + lo) / 2;
+            return hi ?? lo ?? null;
+          })();
 
     return estimateCarryChangeYards({ tempC: t, verdict: showVerdict });
   }, [showVerdict, selectedDay, selectedDaily, weather]);
@@ -592,9 +675,9 @@ const shareText = useMemo(() => {
     if (!carryChange) return null;
     const min = carryChange.minYds;
     const max = carryChange.maxYds;
-
     const fmt = (n: number) => `${n > 0 ? "+" : ""}${n}`;
-    if (min === max) return `${fmt(min)} yds`;
+    // If range is the same or within 1 yard, just show single value
+    if (min === max || Math.abs(max - min) <= 1) return `${fmt(max)} yds`;
     return `${fmt(min)} to ${fmt(max)} yds`;
   }, [carryChange]);
   
@@ -782,7 +865,7 @@ const playOut = useMemo(() => {
 
   // 5) Bucket boundaries (local-time hours):
   // Morning: 6–11, Midday: 11–15, Late: 15–sunset (daylight filtered when available).
-  const tzOffsetSec = typeof (weather as any)?.tzOffsetSec === "number" ? (weather as any).tzOffsetSec : 0;
+  const tzOffsetSec = inferredTzOffsetSec;
   const localHour = (dt: number) => new Date((dt + tzOffsetSec) * 1000).getUTCHours();
 
   const daylightForBuckets = (() => {
@@ -853,6 +936,7 @@ return {
   weather?.daylight?.sunset,
   bestWindowRange?.startDt,
   bestWindowRange?.endDt,
+  inferredTzOffsetSec,
 ]);
 
 
@@ -931,6 +1015,9 @@ return {
   async function loadAll(c: Coords) {
     setLoading(true);
     setGeoErr(null);
+    setWeather(null);
+    setCourses(null);
+    setSelectedDay(0);
 
     const [w, cs] = await Promise.all([
       fetch(`/api/weather?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json()),
@@ -940,7 +1027,6 @@ return {
     setWeather(w);
     setCourses(cs);
 
-    setSelectedDay(0);
     setTeeTime("");
     setShowAllCourses(false);
 
@@ -999,6 +1085,10 @@ return {
       setPredictions([]);
       return;
     }
+    if (suppressAutocomplete.current) {
+      suppressAutocomplete.current = false;
+      return;
+    }
     const t = setTimeout(async () => {
       try {
         setSearching(true);
@@ -1050,6 +1140,44 @@ return {
     }
   }
 
+  async function searchAndLoad(label: string) {
+    try {
+      setGeoErr(null);
+      setLoading(true);
+      setPredictions([]); // prevent dropdown from showing
+
+      const sres = await fetch(`/api/location/suggest?q=${encodeURIComponent(label)}`);
+      const sdata = await sres.json();
+      const first = Array.isArray(sdata?.predictions) ? sdata.predictions[0] : null;
+
+      if (!first?.placeId) {
+        setGeoErr("Couldn't find that location.");
+        setLoading(false);
+        return;
+      }
+
+      const rres = await fetch(`/api/location/resolve?placeId=${encodeURIComponent(first.placeId)}`);
+      const rdata = await rres.json();
+
+      if (!rres.ok || !Number.isFinite(rdata?.lat) || !Number.isFinite(rdata?.lon)) {
+        setGeoErr(rdata?.error || "Couldn't resolve that city.");
+        setLoading(false);
+        return;
+      }
+
+      // Set city query AFTER resolving to the final address, then clear dropdown
+      suppressAutocomplete.current = true;
+      setCityQuery(rdata?.address || label);
+      setPredictions([]);
+      const c = { lat: Number(rdata.lat), lon: Number(rdata.lon) };
+      setCoords(c);
+      await loadAll(c);
+    } catch {
+      setGeoErr("Couldn't load that city.");
+      setLoading(false);
+    }
+  }
+
   /** v1.1: curated courses */
   const allCourses = Array.isArray(courses?.courses) ? courses.courses : [];
   const topCourses = useMemo(() => pickTopCourses(allCourses, 4), [allCourses]);
@@ -1075,9 +1203,9 @@ return {
         />
         <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/50 to-[#0b0f14]" />
 
-        <div className="relative mx-auto max-w-5xl px-6 pb-10 pt-10">
+        <div className="relative mx-auto max-w-5xl px-4 pb-8 pt-8 md:px-6 md:pb-10 md:pt-10">
 		{/* About button – safe, non-intrusive */}
-  <div className="absolute right-6 top-6 z-50">
+  <div className="absolute right-4 top-4 z-50 md:right-6 md:top-6">
     <Link
       href="/about"
       className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-semibold text-white/90 ring-1 ring-white/10 hover:bg-white/15 transition"
@@ -1085,16 +1213,16 @@ return {
       About
     </Link>
   </div>
-          <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
-            <div className="max-w-2xl">
+          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div className="max-w-2xl pr-14 md:pr-0">
               <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs text-white/80">
                 ⛳ CanIGolfToday.com
               </div>
 
-              <h1 className="mt-4 text-4xl font-semibold tracking-tight md:text-5xl">
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl md:mt-4 md:text-5xl">
                 Your tee-time forecast.
               </h1>
-              <p className="mt-3 text-white/75">
+              <p className="mt-2 text-sm text-white/75 md:mt-3 md:text-base">
                 Search a city or course — we’ll score the conditions and find the best 3‑hour daylight window.
               </p>
             </div>
@@ -1106,9 +1234,9 @@ return {
               >
                 Use my location
               </button>
-              {coords && (
+              {coords && cityQuery && (
                 <div className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/80">
-                  {coords.lat.toFixed(3)}, {coords.lon.toFixed(3)}
+                  📍 {cityQuery}
                 </div>
               )}
             </div>
@@ -1159,10 +1287,6 @@ return {
               </div>
             </div>
 
-            <div className="mt-3 text-xs text-white/50">
-              Built for quick decisions — not perfect predictions. Always check course openings + frost delays.
-            </div>
-
             {geoErr && (
               <div className="mt-3 rounded-2xl bg-rose-500/15 p-3 text-sm text-rose-200">
                 {geoErr}
@@ -1172,35 +1296,71 @@ return {
         </div>
       </div>
 
-      <div className="mx-auto max-w-5xl px-6 pb-16 pt-8">
+      <div className="mx-auto max-w-5xl px-4 pb-12 pt-6 md:px-6 md:pb-16 md:pt-8">
         {!loading && !(weather?.golf || selectedDaily?.golf) && (
-          <section className="grid gap-4 md:grid-cols-3">
-            <div className="rounded-3xl bg-white/5 p-5 ring-1 ring-white/10">
-              <div className="text-sm font-semibold text-white/90">How it works</div>
-              <div className="mt-2 text-sm text-white/70">
-                We score temperature, wind, precipitation, and daylight to find the best golf window.
+          <section>
+            <div className="text-sm font-semibold text-white/50 uppercase tracking-wider mb-4">Popular destinations</div>
+            <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+              {[
+                { label: "Scottsdale, AZ", slug: "scottsdale", emoji: "☀️" },
+                { label: "Myrtle Beach, SC", slug: "myrtle-beach", emoji: "🏖️" },
+                { label: "Pebble Beach, CA", slug: "pebble-beach", emoji: "🌊" },
+                { label: "St. Andrews, Scotland", slug: "st-andrews", emoji: "🏴󠁧󠁢󠁳󠁣󠁴󠁿" },
+                { label: "Augusta, GA", slug: "augusta", emoji: "🌸" },
+                { label: "Bandon, OR", slug: "bandon", emoji: "🌲" },
+                { label: "Toronto, ON", slug: "toronto", emoji: "🍁" },
+                { label: "Cabot Cliffs, NS", slug: "cabot-cliffs", emoji: "🌬️" },
+                { label: "Pinehurst, NC", slug: "pinehurst", emoji: "⛳" },
+                { label: "Palm Springs, CA", slug: "palm-springs", emoji: "🌴" },
+                { label: "Whistling Straits, WI", slug: "whistling-straits", emoji: "💨" },
+                { label: "TPC Sawgrass, FL", slug: "tpc-sawgrass", emoji: "🐊" },
+              ].map(({ label, emoji }) => (
+                <button
+                  key={label}
+                  onClick={() => searchAndLoad(label)}
+                  className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:bg-white/10 hover:text-white transition text-left"
+                >
+                  <span className="text-lg">{emoji}</span>
+                  <span className="font-medium">{label}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {loading && (
+          <section className="rounded-3xl bg-white/5 p-4 ring-1 ring-white/10 animate-pulse md:p-6">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-2xl bg-white/10" />
+              <div className="space-y-2">
+                <div className="h-6 w-32 rounded-lg bg-white/10" />
+                <div className="h-4 w-48 rounded-lg bg-white/10" />
               </div>
             </div>
-
-            <div className="rounded-3xl bg-white/5 p-5 ring-1 ring-white/10">
-              <div className="text-sm font-semibold text-white/90">What the score means</div>
-              <div className="mt-2 text-sm text-white/70">
-                Green = ideal. Yellow = playable tradeoffs. Red = tough conditions.
-              </div>
+            <div className="mt-5 h-12 w-full rounded-2xl bg-white/10" />
+            <div className="mt-4 rounded-2xl bg-white/5 p-4 space-y-3">
+              <div className="h-4 w-40 rounded bg-white/10" />
+              <div className="h-4 w-56 rounded bg-white/10" />
+              <div className="h-4 w-52 rounded bg-white/10" />
+              <div className="h-4 w-44 rounded bg-white/10" />
             </div>
-
-            <div className="rounded-3xl bg-white/5 p-5 ring-1 ring-white/10">
-              <div className="text-sm font-semibold text-white/90">Why it’s simple</div>
-              <div className="mt-2 text-sm text-white/70">
-                No forecasts overload — just a clear “should I book?”
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="h-24 rounded-2xl bg-white/10" />
+              <div className="h-24 rounded-2xl bg-white/10" />
+            </div>
+            <div className="mt-6 space-y-2">
+              <div className="h-4 w-24 rounded bg-white/10" />
+              <div className="mt-3 flex gap-2">
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="h-16 w-28 rounded-2xl bg-white/10" />
+                ))}
               </div>
             </div>
           </section>
         )}
-        {loading && <div className="text-white/70">Loading…</div>}
 
         {(weather?.golf || selectedDaily?.golf) && (
-          <section className={`rounded-3xl bg-white/5 p-6 shadow-sm ring-1 ${style.ring}`}>
+          <section className={`rounded-3xl bg-white/5 p-4 shadow-sm ring-1 md:p-6 ${style.ring}`}>
             <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
                 <div className="flex items-center gap-3">
@@ -1210,7 +1370,12 @@ return {
                     {style.dot}
                   </div>
                   <div>
-                    <div className="text-2xl font-semibold">{verdictLabel}</div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-2xl font-semibold">{verdictLabel}</div>
+                      <div className="rounded-full bg-white/10 px-2.5 py-0.5 text-sm text-white/60">
+                        {selectedDay === 0 ? "Today" : selectedDaily?.dayLabel ?? ""}
+                      </div>
+                    </div>
                     <div className="mt-1 text-sm text-white/70">
                       Score: <span className="font-semibold text-white">{showScore}</span>/100 —{" "}
                       {showReason}
@@ -1220,8 +1385,14 @@ return {
                       <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>
                     )}
 
+                    {carryChangeText && (
+                      <div className="mt-3">
+                        <Chip>🏌️ Ball flight: {carryChangeText} vs typical</Chip>
+                      </div>
+                    )}
+
                     {showVerdict === "RED" && redReasonChips.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-2">
+                      <div className="mt-3 flex gap-2 overflow-x-auto pb-2 scrollbar-none">
                         {redReasonChips.map((c) => (
                           <Chip key={c}>{c}</Chip>
                         ))}
@@ -1313,8 +1484,8 @@ return {
                       <div className="rounded-2xl bg-white/10 p-4 ring-1 ring-white/10">
                         <div className="flex items-start justify-between gap-3">
                           <div className="text-sm font-semibold text-white/90">Greens speed</div>
-                          <span className="inline-flex items-center rounded-full bg-white/10 px-2.5 py-1 text-xs font-semibold text-white/85">
-                            {String(greensSpeed.label).replace(/^Greens speed:\s*/i, "")}
+                          <span className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold" style={groundBadgeStyle(cleanGroundLabel(greensSpeed.label))}>
+                            {cleanGroundLabel(greensSpeed.label)}
                           </span>
                         </div>
                         <div className="mt-1 text-sm text-white/70">{greensSpeed.detail}</div>
@@ -1325,8 +1496,8 @@ return {
                       <div className="rounded-2xl bg-white/10 p-4 ring-1 ring-white/10">
                         <div className="flex items-start justify-between gap-3">
                           <div className="text-sm font-semibold text-white/90">Fairway rollout</div>
-                          <span className="inline-flex items-center rounded-full bg-white/10 px-2.5 py-1 text-xs font-semibold text-white/85">
-                            {String(fairwayRollout.label).replace(/^Fairway rollout:\s*/i, "")}
+                          <span className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold" style={groundBadgeStyle(cleanGroundLabel(fairwayRollout.label))}>
+                            {cleanGroundLabel(fairwayRollout.label)}
                           </span>
                         </div>
                         <div className="mt-1 text-sm text-white/70">{fairwayRollout.detail}</div>
@@ -1387,10 +1558,10 @@ return {
                         const active = idx === selectedDay;
 
                         const dayGreens = d?.ground?.greensSpeed?.label
-                          ? String(d.ground.greensSpeed.label).replace(/^Greens speed:\s*/i, "")
+                          ? cleanGroundLabel(d.ground.greensSpeed.label)
                           : null;
                         const dayRoll = d?.ground?.fairwayRollout?.label
-                          ? String(d.ground.fairwayRollout.label).replace(/^Fairway rollout:\s*/i, "")
+                          ? cleanGroundLabel(d.ground.fairwayRollout.label)
                           : null;
 
                         return (
@@ -1398,7 +1569,7 @@ return {
                             key={d.dateKey || idx}
                             onClick={() => setSelectedDay(idx)}
                             className={[
-                              "rounded-2xl border px-4 py-3 text-left text-sm transition",
+                              "rounded-2xl border px-4 py-3 text-left text-sm transition flex-shrink-0 min-w-[140px] md:min-w-0",
                               active
                                 ? "border-white/30 bg-white/10"
                                 : "border-white/10 bg-white/5 hover:bg-white/10",
@@ -1406,21 +1577,13 @@ return {
                           >
                             <div className="flex items-center gap-2">
                               <span>{dot}</span>
-                              <span className="font-semibold">{d.dayLabel}</span>
+                              <span className="font-semibold">{idx === 0 ? "Today" : d.dayLabel}</span>
                             </div>
                             <div className="mt-1 text-xs text-white/65">
                               {d.maxTemp ?? "—"}° / {d.minTemp ?? "—"}° · wind{" "}
                               {d.windMax ?? "—"}k
                               <span className="text-white/50"> (gust {d.gustMax ?? "—"}k)</span>
                             </div>
-
-                            {(v === "GREEN" || v === "YELLOW") && (dayGreens || dayRoll) && (
-                              <div className="mt-1 text-xs text-white/55">
-                                {dayGreens ? `Greens ${dayGreens}` : ""}
-                                {dayGreens && dayRoll ? " · " : ""}
-                                {dayRoll ? `Rollout ${dayRoll}` : ""}
-                              </div>
-                            )}
                           </button>
                         );
                       })}
@@ -1429,7 +1592,7 @@ return {
                 )}
               </div>
 
-              <div className="rounded-3xl bg-white/5 p-5 text-sm text-white/80 ring-1 ring-white/10 md:min-w-[280px]">
+              <div className="rounded-3xl bg-white/5 p-5 text-sm text-white/80 ring-1 ring-white/10 md:min-w-[240px] md:self-start">
                 {selectedDay === 0 ? (
                   <>
                     <div className="flex justify-between gap-6">
@@ -1450,13 +1613,6 @@ return {
                         </span>
                       </span>
                     </div>
-
-                    {carryChangeText && (
-                      <div className="mt-2 flex justify-between gap-6">
-                        <span className="text-white/60">Carry change</span>
-                        <span>{carryChangeText}</span>
-                      </div>
-                    )}
 
                     {weather?.current?.conditions && (
                       <div className="mt-2 flex justify-between gap-6">
@@ -1480,13 +1636,6 @@ return {
                         <span className="text-white/50"> (gust {selectedDaily?.gustMax ?? "—"})</span>
                       </span>
                     </div>
-
-                    {carryChangeText && (
-                      <div className="mt-2 flex justify-between gap-6">
-                        <span className="text-white/60">Carry change</span>
-                        <span>{carryChangeText}</span>
-                      </div>
-                    )}
 
                     {selectedDaily?.conditions && (
                       <div className="mt-2 flex justify-between gap-6">
