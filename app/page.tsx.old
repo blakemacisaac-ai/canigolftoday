@@ -408,9 +408,7 @@ export default function HomePage() {
   const isToday = selectedDay === 0;
 
   // Resolve blocks for the chosen day.
-  let rawBlocks: any = isToday 
-    ? (weather?.bestTime?.byTime ?? weather?.bestTime?.blocks ?? weather?.bestTime?.byHour ?? weather?.bestTime?.bestBlock ?? null) 
-    : (selectedDaily?.blocks ?? null);
+  let rawBlocks: any = isToday ? (weather?.bestTime?.byTime ?? weather?.bestTime?.blocks ?? weather?.bestTime?.byHour ?? null) : (selectedDaily?.blocks ?? null);
   if (rawBlocks && !Array.isArray(rawBlocks) && typeof rawBlocks === "object") rawBlocks = Object.values(rawBlocks);
   const blocks: any[] = Array.isArray(rawBlocks) ? rawBlocks : [];
 
@@ -449,32 +447,14 @@ export default function HomePage() {
 
   // Helper: validate a candidate start dt against golfing hours + daylight.
   const isValidStart = (dt: number) => {
-    const hr = new Date((dt + tzOffsetSec) * 1000).getUTCHours();
-    
-    // Apply golfing hours check for ALL days (6am-3pm in destination timezone)
-    if (hr < 6 || hr > 15) {
-      return false;
-    }
-    
-    // Apply daylight and sunset checks only for today (since we have that data)
     if (isToday) {
-      // Check if dt and the daylight bounds are actually on the same day
-      const dtDayInDestination = Math.floor((dt + tzOffsetSec) / (24 * 60 * 60));
-      const sunsetDayInDestination = sunsetDt != null ? Math.floor((sunsetDt + tzOffsetSec) / (24 * 60 * 60)) : null;
-      
-      // Only apply sunset check if they're on the same day
-      if (sunsetDt != null && sunsetDayInDestination === dtDayInDestination && dt >= sunsetDt) {
-        return false;
-      }
-      
-      if (daylightStart != null) {
-        const daylightStartDay = Math.floor((daylightStart + tzOffsetSec) / (24 * 60 * 60));
-        if (daylightStartDay === dtDayInDestination && dt < daylightStart) {
-          return false;
-        }
-      }
+      if (daylightStart != null && dt < daylightStart) return false;
+      if (latestStart != null && dt > latestStart) return false;
+      // golfing hours in destination local time: 6am–3pm starts
+      const hr = new Date((dt + tzOffsetSec) * 1000).getUTCHours();
+      if (hr < 6 || hr > 15) return false;
+      if (sunsetDt != null && dt >= sunsetDt) return false;
     }
-    
     return true;
   };
 
@@ -488,7 +468,7 @@ export default function HomePage() {
   let endDt: number | null = endDtFromApi;
   if (startDt != null && endDt == null) endDt = startDt + 3 * 60 * 60;
 
-  // 2) If missing or invalid, derive from blocks using destination sunrise/sunset + golfing hours.
+  // 2) If missing or invalid (TODAY), derive from blocks using destination sunrise/sunset + golfing hours.
   if ((startDt == null || !isValidStart(startDt)) && blocks.length > 0) {
     const pool = blocks
       .filter((b: any) => typeof b?.dt === "number" && typeof b?.score === "number")
@@ -505,41 +485,13 @@ export default function HomePage() {
       return null;
     }
   }
-  
-  // 3) Final fallback: if we still don't have a window, create a generic morning window
-  if (startDt == null && isToday) {
-    
-    // Create a generic morning window (8am-11am) in destination timezone
-    // Get today's date at midnight UTC
-    const nowUtc = Math.floor(Date.now() / 1000);
-    const todayMidnightUtc = Math.floor(nowUtc / (24 * 60 * 60)) * (24 * 60 * 60);
-    
-    // 8am in destination timezone
-    const morningStart = todayMidnightUtc + (8 * 60 * 60) - tzOffsetSec;
-    
-    
-    if (isValidStart(morningStart)) {
-      startDt = morningStart;
-      endDt = morningStart + 3 * 60 * 60;
-    } else {
-    }
-  }
 
-  if (startDt == null || endDt == null) {
-    return null;
-  }
+  if (startDt == null || endDt == null) return null;
 
-  // Clamp end to sunset for TODAY (only if sunset is actually today)
+  // Clamp end to sunset for TODAY
   if (isToday && sunsetDt != null) {
-    const dtDayInDestination = Math.floor((startDt + tzOffsetSec) / (24 * 60 * 60));
-    const sunsetDayInDestination = Math.floor((sunsetDt + tzOffsetSec) / (24 * 60 * 60));
-    
-    if (dtDayInDestination === sunsetDayInDestination) {
-      endDt = Math.min(endDt, sunsetDt);
-      if (startDt >= sunsetDt) {
-        return null;
-      }
-    }
+    endDt = Math.min(endDt, sunsetDt);
+    if (startDt >= sunsetDt) return null;
   }
 
   const startStr = fmt(startDt);
@@ -553,9 +505,7 @@ export default function HomePage() {
   }
 
   const avgSuffix = typeof avg === "number" ? ` (avg ${Math.round(avg)}/100)` : "";
-  const result = `${startStr} – ${endStr}${avgSuffix}`;
-  
-  return result;
+  return `${startStr} – ${endStr}${avgSuffix}`;
 }, [selectedDaily, selectedDay, weather]);
 
 const shareText = useMemo(() => {
@@ -633,13 +583,10 @@ const shareText = useMemo(() => {
     if (isToday) {
       if (daylightStart != null && dt < daylightStart) return false;
       if (latestStart != null && dt > latestStart) return false;
+      const hr = new Date((dt + tzOffsetSec) * 1000).getUTCHours();
+      if (hr < 6 || hr > 15) return false;
       if (sunsetDt != null && dt >= sunsetDt) return false;
     }
-    
-    // Apply golfing hours check for ALL days (6am-3pm in destination timezone)
-    const hr = new Date((dt + tzOffsetSec) * 1000).getUTCHours();
-    if (hr < 6 || hr > 15) return false;
-    
     return true;
   };
 
@@ -1138,7 +1085,6 @@ return {
               )}
 
               {searching && <div className="mt-2 text-xs text-white/60">Searching…</div>}
-            </div>
 
             {/* Quick picks + secondary actions */}
             <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -1157,10 +1103,27 @@ return {
                   );
                 })}
               </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={useMyLocation}
+                  className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-semibold text-white/90 ring-1 ring-white/10 hover:bg-white/15 transition"
+                >
+                  Use my location
+                </button>
+
+                {coords && (
+                  <div className="rounded-2xl bg-white/5 px-4 py-2 text-sm text-white/70 ring-1 ring-white/10">
+                    {coords.lat.toFixed(3)}, {coords.lon.toFixed(3)}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="mt-3 text-xs text-white/50">
               Built for quick decisions — not perfect predictions. Always check course openings + frost delays.
+            </div>
             </div>
 
             {geoErr && (
@@ -1414,7 +1377,7 @@ return {
                               <span className="text-white/50"> (gust {d.gustMax ?? "—"}k)</span>
                             </div>
 
-                            {(v === "GREEN" || v === "YELLOW") && (dayGreens || dayRoll) && (
+                            {v === "YELLOW" && (dayGreens || dayRoll) && (
                               <div className="mt-1 text-xs text-white/55">
                                 {dayGreens ? `Greens ${dayGreens}` : ""}
                                 {dayGreens && dayRoll ? " · " : ""}
