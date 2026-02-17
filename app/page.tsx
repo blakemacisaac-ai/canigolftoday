@@ -1268,25 +1268,6 @@ return {
               {searching && <div className="mt-2 text-xs text-white/60">Searching…</div>}
             </div>
 
-            {/* Quick picks + secondary actions */}
-            <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="flex flex-wrap gap-2">
-                {["Toronto", "Myrtle Beach", "Scottsdale", "Pebble Beach", "Cabot Cliffs"].map((label) => {
-                  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-                  return (
-                    <Link
-                      key={label}
-                      href={`/city/${slug}`}
-                      className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 ring-1 ring-white/10 hover:bg-white/15"
-                      onClick={() => setCityQuery(label)}
-                    >
-                      {label}
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-
             {geoErr && (
               <div className="mt-3 rounded-2xl bg-rose-500/15 p-3 text-sm text-rose-200">
                 {geoErr}
