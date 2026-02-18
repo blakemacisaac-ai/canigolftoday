@@ -380,6 +380,33 @@ export default function HomePage() {
     };
   }, [teeTime, selectedDaily]);
 
+  // Validate tee time against golfing hours and sunset
+  const teeTimeWarning = useMemo(() => {
+    if (!teeTime) return null;
+    const [hh, mm] = teeTime.split(":").map((n) => Number(n));
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+
+    // Check golfing hours (6am-3pm is typical)
+    if (hh < 6) return "⚠️ Before typical course hours (6am)";
+    if (hh >= 15) return "⚠️ Late tee time — may finish after dark";
+
+    // Check against sunset for today
+    if (selectedDay === 0 && weather?.daylight?.sunset) {
+      const sunsetDate = new Date(weather.daylight.sunset * 1000);
+      const sunsetHour = sunsetDate.getHours();
+      const sunsetMin = sunsetDate.getMinutes();
+      const teeMin = hh * 60 + mm;
+      const sunsetTotalMin = sunsetHour * 60 + sunsetMin;
+      
+      // Warn if tee time is within 3 hours of sunset (typical round length)
+      if (teeMin > sunsetTotalMin - 180) {
+        return `⚠️ Less than 3 hours before sunset (${sunsetDate.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})})`;
+      }
+    }
+
+    return null;
+  }, [teeTime, selectedDay, weather?.daylight?.sunset]);
+
   const showVerdict =
     teeTimeResult?.verdict ?? selectedDaily?.golf?.verdict ?? weather?.golf?.verdict ?? null;
 
@@ -1012,6 +1039,114 @@ return {
       .map((c) => c.label);
   }, [showVerdict, teeTime, teeTimeResult, selectedDay, selectedDaily, weather]);
 
+  const yellowReasonChips = useMemo(() => {
+    if (showVerdict !== "YELLOW") return [];
+
+    const chips: { label: string; weight: number }[] = [];
+
+    const tempC =
+      (typeof teeTimeResult?.temp === "number" ? teeTimeResult.temp : null) ??
+      (selectedDay === 0 ? weather?.current?.temp : null) ??
+      null;
+
+    const windKph =
+      (typeof teeTimeResult?.windKph === "number" ? teeTimeResult.windKph : null) ??
+      (selectedDay === 0 ? weather?.current?.windKph : null) ??
+      (typeof selectedDaily?.windMax === "number" ? selectedDaily.windMax : null) ??
+      null;
+
+    const conditions =
+      teeTimeResult?.conditions ??
+      (selectedDay === 0 ? weather?.current?.conditions : selectedDaily?.conditions) ??
+      null;
+
+    if (typeof tempC === "number") {
+      if (tempC >= 30) chips.push({ label: "🌡 Hot", weight: 70 });
+      else if (tempC <= 8) chips.push({ label: "🧊 Chilly", weight: 75 });
+    }
+
+    if (typeof windKph === "number") {
+      if (windKph >= 20) chips.push({ label: "💨 Breezy", weight: 80 });
+    }
+
+    const cond = typeof conditions === "string" ? conditions.toLowerCase() : "";
+    if (cond.includes("cloud") || cond.includes("overcast")) {
+      chips.push({ label: "☁️ Cloudy", weight: 40 });
+    }
+
+    if (cond.includes("fog") || cond.includes("mist")) {
+      chips.push({ label: "🌫 Foggy", weight: 60 });
+    }
+
+    // Analyze playOut to see if specific time blocks are problematic
+    if (playOut?.segments) {
+      const morning = playOut.segments.find((s: any) => s.key === "morning");
+      const midday = playOut.segments.find((s: any) => s.key === "midday");
+      const late = playOut.segments.find((s: any) => s.key === "late");
+
+      if (morning && morning.score < 60) chips.push({ label: "⏰ Better later", weight: 65 });
+      else if (late && late.score < 60) chips.push({ label: "⏰ Go early", weight: 65 });
+      else if (midday && midday.score >= 70 && (morning.score < 65 || late.score < 65)) {
+        chips.push({ label: "⏰ Catch midday window", weight: 70 });
+      }
+    }
+
+    if (chips.length === 0) chips.push({ label: "✓ Playable", weight: 50 });
+
+    return chips
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, 3)
+      .map((c) => c.label);
+  }, [showVerdict, teeTime, teeTimeResult, selectedDay, selectedDaily, weather, playOut]);
+
+  // Limiting factor hint for YELLOW days - explains what's keeping it from green
+  const yellowLimitingFactor = useMemo(() => {
+    if (showVerdict !== "YELLOW" || showScore == null || showScore >= 80) return null;
+
+    const tempC =
+      (typeof teeTimeResult?.temp === "number" ? teeTimeResult.temp : null) ??
+      (selectedDay === 0 ? weather?.current?.temp : null) ??
+      null;
+
+    const windKph =
+      (typeof teeTimeResult?.windKph === "number" ? teeTimeResult.windKph : null) ??
+      (selectedDay === 0 ? weather?.current?.windKph : null) ??
+      (typeof selectedDaily?.windMax === "number" ? selectedDaily.windMax : null) ??
+      null;
+
+    const conditions =
+      teeTimeResult?.conditions ??
+      (selectedDay === 0 ? weather?.current?.conditions : selectedDaily?.conditions) ??
+      null;
+
+    // Find the main factor keeping it from 80+
+    const gap = 80 - showScore;
+    
+    if (typeof windKph === "number" && windKph >= 20) {
+      return `💨 Wind ${windKph}km/h is pushing you below 80. Otherwise solid day.`;
+    }
+
+    if (typeof tempC === "number") {
+      if (tempC <= 8) {
+        return `🧊 Temp ${tempC}°C is a bit chilly for green-light status. Otherwise decent.`;
+      }
+      if (tempC >= 30) {
+        return `🌡 Temp ${tempC}°C is keeping it from green. Otherwise playable.`;
+      }
+    }
+
+    const cond = typeof conditions === "string" ? conditions.toLowerCase() : "";
+    if (cond.includes("cloud") || cond.includes("overcast")) {
+      return `☁️ Cloudy conditions are the main factor. Otherwise a good day.`;
+    }
+
+    if (gap <= 5) {
+      return `Just ${gap} points from green — marginal conditions.`;
+    }
+
+    return null;
+  }, [showVerdict, showScore, teeTimeResult, selectedDay, selectedDaily, weather]);
+
   async function loadAll(c: Coords) {
     setLoading(true);
     setGeoErr(null);
@@ -1180,7 +1315,7 @@ return {
 
   /** v1.1: curated courses */
   const allCourses = Array.isArray(courses?.courses) ? courses.courses : [];
-  const topCourses = useMemo(() => pickTopCourses(allCourses, 4), [allCourses]);
+  const topCourses = useMemo(() => pickTopCourses(allCourses, 2), [allCourses]);
 
   const showSims = Array.isArray(simulators?.simulators) ? simulators.simulators : [];
 
@@ -1362,6 +1497,12 @@ return {
                       {showReason}
                     </div>
 
+                    {yellowLimitingFactor && (
+                      <div className="mt-2 text-sm text-white/60 italic">
+                        {yellowLimitingFactor}
+                      </div>
+                    )}
+
                     {confidenceLine && (
                       <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>
                     )}
@@ -1375,6 +1516,14 @@ return {
                     {showVerdict === "RED" && redReasonChips.length > 0 && (
                       <div className="mt-3 flex gap-2 overflow-x-auto pb-2 scrollbar-none">
                         {redReasonChips.map((c) => (
+                          <Chip key={c}>{c}</Chip>
+                        ))}
+                      </div>
+                    )}
+
+                    {showVerdict === "YELLOW" && yellowReasonChips.length > 0 && (
+                      <div className="mt-3 flex gap-2 overflow-x-auto pb-2 scrollbar-none">
+                        {yellowReasonChips.map((c) => (
                           <Chip key={c}>{c}</Chip>
                         ))}
                       </div>
@@ -1499,33 +1648,50 @@ return {
                   </div>
                 )}
 
-                <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <div className="text-sm text-white/70">Tee time (optional)</div>
+                <div className="mt-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="text-sm text-white/70">Tee time (optional)</div>
 
-                  <input
-                    type="time"
-                    value={teeTime}
-                    onChange={(e) => setTeeTime(e.target.value)}
-                    className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-white outline-none focus:border-white/25"
-                  />
+                    <input
+                      type="time"
+                      value={teeTime}
+                      onChange={(e) => setTeeTime(e.target.value)}
+                      className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-white outline-none focus:border-white/25"
+                    />
 
-                  {teeTimeResult && (
-                    <div className="rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
-                      <span className="text-white/60">At {teeTime}:</span>{" "}
-                      <span className="font-semibold">{teeTimeResult.score}/100</span>{" "}
-                      <span className="text-white/60">
-                        (wind {teeTimeResult.windKph}k, {teeTimeResult.conditions})
-                      </span>
+                    {teeTime && (
+                      <button
+                        onClick={() => setTeeTime("")}
+                        className="text-sm text-white/60 underline decoration-white/30 hover:text-white"
+                      >
+                        clear
+                      </button>
+                    )}
+                  </div>
+
+                  {teeTimeWarning && (
+                    <div className="mt-3 rounded-2xl bg-amber-500/15 border border-amber-500/30 px-4 py-2.5 text-sm text-amber-200">
+                      {teeTimeWarning}
                     </div>
                   )}
 
-                  {teeTime && (
-                    <button
-                      onClick={() => setTeeTime("")}
-                      className="text-sm text-white/60 underline decoration-white/30 hover:text-white"
-                    >
-                      clear
-                    </button>
+                  {teeTimeResult && (
+                    <div className={`mt-3 inline-flex items-center gap-3 rounded-2xl px-4 py-2.5 text-sm border ${
+                      teeTimeResult.score >= 80 
+                        ? "bg-emerald-500/15 border-emerald-500/30" 
+                        : teeTimeResult.score >= 60 
+                        ? "bg-amber-500/15 border-amber-500/30"
+                        : "bg-rose-500/15 border-rose-500/30"
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-white/60 text-xs">At {teeTime}</span>
+                        <span className="font-bold text-white text-lg">{teeTimeResult.score}/100</span>
+                      </div>
+                      <span className="text-white/30">·</span>
+                      <span className="text-white/50 text-xs">
+                        wind {teeTimeResult.windKph}k · {teeTimeResult.conditions}
+                      </span>
+                    </div>
                   )}
                 </div>
 
@@ -1655,27 +1821,24 @@ return {
               </div>
             ) : (
               <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/70">
-                No top picks found nearby.
+                No courses found nearby.
               </div>
             )}
 
-            {allCourses.length > 0 && (
-              <div className="mt-5 flex flex-col items-start gap-3">
+            {restCourses.length > 0 && (
+              <div className="mt-4">
                 <button
                   onClick={() => setShowAllCourses((v) => !v)}
                   className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 hover:bg-white/10"
                 >
-                  {showAllCourses ? "Hide all courses" : `Show all ${allCourses.length} courses`}
+                  {showAllCourses ? "Show less" : `Show ${restCourses.length} more`}
                 </button>
 
                 {showAllCourses && (
-                  <div className="w-full">
-                    <div className="mb-3 text-sm text-white/60">All nearby courses</div>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      {restCourses.map((c: any) => (
-                        <CourseCard key={c.placeId} c={c} />
-                      ))}
-                    </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    {restCourses.map((c: any) => (
+                      <CourseCard key={c.placeId} c={c} />
+                    ))}
                   </div>
                 )}
               </div>
