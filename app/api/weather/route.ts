@@ -342,7 +342,7 @@ export async function GET(req: Request) {
   let currentUV: number | null = null;
   try {
     const uvRes = await fetch(
-      `https://api.openweathermap.org/data/2.5/uvi?lat=${lat}&lon=${lon}&appid=${key}`
+      `https://api.openweathermap.org/data/2.5/uvi?lat=${lat}&lon=${lon}&appid=${apiKey}`
     );
     if (uvRes.ok) {
       const uvData = await uvRes.json();
