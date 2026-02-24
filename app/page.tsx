@@ -41,6 +41,16 @@ function cleanGroundLabel(label: string | null): string {
     .trim();
 }
 
+// Convert wind degree to compass direction
+function windDirFromDeg(deg: number | null | undefined): string {
+  if (deg == null || !Number.isFinite(deg)) return "";
+  const normalized = ((deg % 360) + 360) % 360;
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const arrows = ["↑", "↗", "→", "↘", "↓", "↙", "←", "↖"];
+  const index = Math.round(normalized / 45) % 8;
+  return `${arrows[index]} ${dirs[index]}`;
+}
+
 function Chip({ children }: { children: React.ReactNode }) {
   return (
     <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/80">
@@ -249,15 +259,16 @@ function CourseCard({ c }: { c: any }) {
 
   const openText = c?.openNow === true ? "Open now" : c?.openNow === false ? "Closed" : null;
 
+  // Affiliate link - replace with your actual affiliate ID once approved
+  const GOLFNOW_AFFILIATE_ID = process.env.NEXT_PUBLIC_GOLFNOW_AFFILIATE_ID || "";
+  const bookingUrl = GOLFNOW_AFFILIATE_ID
+    ? `https://www.golfnow.com/tee-times?q=${encodeURIComponent(c.name)}&aff=${GOLFNOW_AFFILIATE_ID}`
+    : null;
+
   return (
-    <a
-      href={c.mapsUrl || "#"}
-      target="_blank"
-      rel="noreferrer"
-      className="group rounded-3xl border border-white/10 bg-white/5 p-5 transition hover:bg-white/10"
-    >
+    <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
       <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div className="truncate text-base font-semibold">{c.name}</div>
 
@@ -276,14 +287,30 @@ function CourseCard({ c }: { c: any }) {
 
           {c.address && <div className="mt-2 line-clamp-2 text-sm text-white/65">{c.address}</div>}
 
-          <div className="mt-4 text-sm text-white/70">Tap to open directions</div>
-        </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <a
+              href={c.mapsUrl || "#"}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/80 hover:bg-white/10 transition"
+            >
+              Directions →
+            </a>
 
-        <div className="rounded-2xl bg-white/10 px-3 py-2 text-xs font-semibold text-white/80 group-hover:bg-white/15">
-          Maps →
+            {bookingUrl && (
+              <a
+                href={bookingUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 transition"
+              >
+                Book Tee Time
+              </a>
+            )}
+          </div>
         </div>
       </div>
-    </a>
+    </div>
   );
 }
 
@@ -311,6 +338,24 @@ export default function HomePage() {
 
   // v1.1: “Show all courses” toggle
   const [showAllCourses, setShowAllCourses] = useState(false);
+  const [showScoreExplainer, setShowScoreExplainer] = useState(false);
+
+  // Animated social proof counter
+  const TARGET_COUNT = 1247;
+  const [counterVal, setCounterVal] = useState(0);
+  useEffect(() => {
+    let start: number | null = null;
+    const duration = 1800;
+    const step = (ts: number) => {
+      if (!start) start = ts;
+      const progress = Math.min((ts - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setCounterVal(Math.floor(eased * TARGET_COUNT));
+      if (progress < 1) requestAnimationFrame(step);
+    };
+    const raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   // One-time query param bootstrap (supports landing pages like /city/toronto)
   const didBootstrapFromQuery = useRef(false);
@@ -1147,6 +1192,48 @@ return {
     return null;
   }, [showVerdict, showScore, teeTimeResult, selectedDay, selectedDaily, weather]);
 
+  // Frost delay warning - only for today
+  const frostWarning = useMemo(() => {
+    if (selectedDay !== 0 || !weather?.daily?.[0]) return null;
+    const today = weather.daily[0];
+    const minTemp = today?.minTemp ?? today?.minTempC ?? null;
+    
+    if (minTemp != null && minTemp <= 2) {
+      return "❄️ Frost likely — courses may delay opening until mid-morning";
+    }
+    return null;
+  }, [selectedDay, weather]);
+
+  // Rain chance - only show if >20%
+  const rainChance = useMemo(() => {
+    if (selectedDay === 0) {
+      const precipProb = weather?.current?.precipProb ?? weather?.daily?.[0]?.precipProb ?? null;
+      if (precipProb != null && precipProb >= 20) {
+        return `${Math.round(precipProb)}% chance of rain`;
+      }
+    } else if (selectedDaily) {
+      const precipProb = selectedDaily?.precipProb ?? null;
+      if (precipProb != null && precipProb >= 20) {
+        return `${Math.round(precipProb)}% chance of rain`;
+      }
+    }
+    return null;
+  }, [selectedDay, weather, selectedDaily]);
+
+  // UV index warning - only show if moderate or higher (≥3)
+  const uvWarning = useMemo(() => {
+    const uv = selectedDay === 0 
+      ? (weather?.current?.uvIndex ?? weather?.daily?.[0]?.uvIndex ?? null)
+      : (selectedDaily?.uvIndex ?? null);
+    
+    if (uv == null || uv < 3) return null;
+    
+    if (uv >= 8) return `☀️ UV ${uv} (Very High) — Sunscreen essential`;
+    if (uv >= 6) return `☀️ UV ${uv} (High) — Wear sunscreen`;
+    if (uv >= 3) return `☀️ UV ${uv} (Moderate) — Consider sunscreen`;
+    return null;
+  }, [selectedDay, weather, selectedDaily]);
+
   async function loadAll(c: Coords) {
     setLoading(true);
     setGeoErr(null);
@@ -1360,6 +1447,14 @@ return {
               <p className="mt-2 text-sm text-white/75 md:mt-3 md:text-base">
                 Search a city or course — we’ll score the conditions and find the best 3‑hour daylight window.
               </p>
+
+              <div className="mt-3 flex items-center gap-1.5 text-xs text-white/45">
+                <span className="text-emerald-400/70">⛳</span>
+                <span>Checked by{" "}
+                  <span className="font-semibold text-white/60">{counterVal.toLocaleString()}</span>
+                  {" "}golfers this week
+                </span>
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-3">
@@ -1403,11 +1498,54 @@ return {
               {searching && <div className="mt-2 text-xs text-white/60">Searching…</div>}
             </div>
 
+            {/* How scoring works - expandable */}
+            <div className="mt-4">
+              <button
+                onClick={() => setShowScoreExplainer((v) => !v)}
+                className="flex items-center gap-2 text-sm text-white/60 hover:text-white/80 transition"
+              >
+                <span className="text-base">ⓘ</span>
+                <span>How we score conditions</span>
+                <span className="text-xs">{showScoreExplainer ? "▲" : "▼"}</span>
+              </button>
+
+              {showScoreExplainer && (
+                <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
+                  <div className="flex items-start gap-3">
+                    <span className="text-lg">🟢</span>
+                    <div>
+                      <div className="text-sm font-semibold text-white/90">80–100 · Green light</div>
+                      <div className="text-sm text-white/55">Great conditions. Book it.</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-lg">🟡</span>
+                    <div>
+                      <div className="text-sm font-semibold text-white/90">60–79 · Playable</div>
+                      <div className="text-sm text-white/55">Worth going if you catch the right window.</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-lg">🔴</span>
+                    <div>
+                      <div className="text-sm font-semibold text-white/90">Below 60 · Tough day</div>
+                      <div className="text-sm text-white/55">Probably not worth it. Check the next few days.</div>
+                    </div>
+                  </div>
+                  <div className="text-sm text-white/40 border-t border-white/10 pt-3">
+                    Scores weigh temperature, wind, precipitation, humidity, and daylight. The best window is the
+                    highest-scoring 3-hour stretch within golfing hours.
+                  </div>
+                </div>
+              )}
+            </div>
+
             {geoErr && (
               <div className="mt-3 rounded-2xl bg-rose-500/15 p-3 text-sm text-rose-200">
                 {geoErr}
               </div>
             )}
+
           </section>
         </div>
       </div>
@@ -1416,7 +1554,7 @@ return {
         {!loading && !(weather?.golf || selectedDaily?.golf) && (
           <section>
             <div className="text-sm font-semibold text-white/50 uppercase tracking-wider mb-4">Popular destinations</div>
-            <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+            <div className="grid gap-2 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
               {[
                 { label: "Scottsdale, AZ", slug: "scottsdale", emoji: "☀️" },
                 { label: "Myrtle Beach, SC", slug: "myrtle-beach", emoji: "🏖️" },
@@ -1430,11 +1568,14 @@ return {
                 { label: "Palm Springs, CA", slug: "palm-springs", emoji: "🌴" },
                 { label: "Whistling Straits, WI", slug: "whistling-straits", emoji: "💨" },
                 { label: "TPC Sawgrass, FL", slug: "tpc-sawgrass", emoji: "🐊" },
-              ].map(({ label, emoji }) => (
+              ].map(({ label, emoji }, idx) => (
                 <button
                   key={label}
                   onClick={() => searchAndLoad(label)}
-                  className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:bg-white/10 hover:text-white transition text-left"
+                  className={[
+                    "flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 hover:bg-white/10 hover:text-white transition text-left",
+                    idx >= 6 ? "hidden md:flex" : "",
+                  ].join(" ")}
                 >
                   <span className="text-lg">{emoji}</span>
                   <span className="font-medium">{label}</span>
@@ -1443,6 +1584,9 @@ return {
             </div>
           </section>
         )}
+
+
+
 
         {loading && (
           <section className="rounded-3xl bg-white/5 p-4 ring-1 ring-white/10 animate-pulse md:p-6">
@@ -1477,7 +1621,7 @@ return {
 
         {(weather?.golf || selectedDaily?.golf) && (
           <section className={`rounded-3xl bg-white/5 p-4 shadow-sm ring-1 md:p-6 ${style.ring}`}>
-            <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
                 <div className="flex items-center gap-3">
                   <div
@@ -1526,6 +1670,21 @@ return {
                         {yellowReasonChips.map((c) => (
                           <Chip key={c}>{c}</Chip>
                         ))}
+                      </div>
+                    )}
+
+                    {/* Frost warning and rain chance - show for all verdicts */}
+                    {(frostWarning || rainChance || uvWarning) && (
+                      <div className="mt-3 flex gap-2 overflow-x-auto pb-2 scrollbar-none">
+                        {frostWarning && (
+                          <Chip>{frostWarning}</Chip>
+                        )}
+                        {rainChance && (
+                          <Chip>🌧 {rainChance}</Chip>
+                        )}
+                        {uvWarning && (
+                          <Chip>{uvWarning}</Chip>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1731,6 +1890,11 @@ return {
                               {d.windMax ?? "—"}k
                               <span className="text-white/50"> (gust {d.gustMax ?? "—"}k)</span>
                             </div>
+                            {d.pop != null && (
+                              <div className="mt-1 text-xs text-white/50">
+                                🌧 {d.pop}% · 💧 {d.humidity ?? "—"}%
+                              </div>
+                            )}
                           </button>
                         );
                       })}
@@ -1739,7 +1903,7 @@ return {
                 )}
               </div>
 
-              <div className="rounded-3xl bg-white/5 p-5 text-sm text-white/80 ring-1 ring-white/10 md:min-w-[240px] md:self-start">
+              <div className="rounded-3xl bg-white/5 p-5 text-sm text-white/80 ring-1 ring-white/10 md:min-w-[240px] md:self-start order-first md:order-last">
                 {selectedDay === 0 ? (
                   <>
                     <div className="flex justify-between gap-6">
@@ -1754,7 +1918,11 @@ return {
                     <div className="mt-2 flex justify-between gap-6">
                       <span className="text-white/60">Wind</span>
                       <span>
-                        {weather?.current?.windKph ?? "—"} km/h{" "}
+                        {weather?.current?.windKph ?? "—"} km/h
+                        {weather?.current?.windDeg != null && (
+                          <span className="text-white/70"> {windDirFromDeg(weather.current.windDeg)}</span>
+                        )}
+                        {" "}
                         <span className="text-white/50">
                           (gust {weather?.current?.gustKph ?? "—"})
                         </span>
@@ -1765,6 +1933,38 @@ return {
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Conditions</span>
                         <span>{weather.current.conditions}</span>
+                      </div>
+                    )}
+
+                    {(weather?.current?.uvIndex ?? weather?.daily?.[0]?.uvIndex) != null && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">UV Index</span>
+                        <span>
+                          {weather?.current?.uvIndex ?? weather?.daily?.[0]?.uvIndex}
+                          <span className="text-white/50 ml-1.5">
+                            {(() => {
+                              const uv = weather?.current?.uvIndex ?? weather?.daily?.[0]?.uvIndex;
+                              if (uv >= 8) return "Very High";
+                              if (uv >= 6) return "High";
+                              if (uv >= 3) return "Moderate";
+                              return "Low";
+                            })()}
+                          </span>
+                        </span>
+                      </div>
+                    )}
+
+                    {weather?.current?.humidity != null && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">Humidity</span>
+                        <span>{weather.current.humidity}%</span>
+                      </div>
+                    )}
+
+                    {weather?.daily?.[0]?.pop != null && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">Rain chance</span>
+                        <span>{weather.daily[0].pop}%</span>
                       </div>
                     )}
                   </>
@@ -1788,6 +1988,38 @@ return {
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Conditions</span>
                         <span>{selectedDaily.conditions}</span>
+                      </div>
+                    )}
+
+                    {selectedDaily?.uvIndex != null && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">UV Index</span>
+                        <span>
+                          {selectedDaily.uvIndex}
+                          <span className="text-white/50 ml-1.5">
+                            {(() => {
+                              const uv = selectedDaily.uvIndex;
+                              if (uv >= 8) return "Very High";
+                              if (uv >= 6) return "High";
+                              if (uv >= 3) return "Moderate";
+                              return "Low";
+                            })()}
+                          </span>
+                        </span>
+                      </div>
+                    )}
+
+                    {selectedDaily?.humidity != null && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">Humidity</span>
+                        <span>{selectedDaily.humidity}%</span>
+                      </div>
+                    )}
+
+                    {selectedDaily?.pop != null && (
+                      <div className="mt-2 flex justify-between gap-6">
+                        <span className="text-white/60">Rain chance</span>
+                        <span>{selectedDaily.pop}%</span>
                       </div>
                     )}
                   </>

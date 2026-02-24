@@ -19,8 +19,6 @@ type ForecastBlock = {
   windKph: number;
   gustKph: number;
   precipMm: number;
-  pop: number;
-  humidity: number;
   conditions: string | null;
   inDaylight: boolean;
   golf: GolfScore;
@@ -118,27 +116,6 @@ async function getPastPrecipMm(lat: number, lon: number): Promise<{ past24: numb
     };
   } catch {
     return { past24: null, past48: null };
-  }
-}
-
-async function getDailyUV(lat: number, lon: number): Promise<Record<string, number>> {
-  // Open-Meteo returns daily UV index max — no API key needed.
-  try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=uv_index_max&forecast_days=6&timezone=UTC`;
-    const r = await fetch(url, { headers: { "Accept": "application/json" } });
-    if (!r.ok) return {};
-    const j: any = await r.json();
-    const dates: string[] = j?.daily?.time ?? [];
-    const uvs: number[] = j?.daily?.uv_index_max ?? [];
-    const map: Record<string, number> = {};
-    for (let i = 0; i < dates.length; i++) {
-      if (dates[i] && Number.isFinite(uvs[i])) {
-        map[dates[i]] = Math.round(uvs[i] * 10) / 10;
-      }
-    }
-    return map;
-  } catch {
-    return {};
   }
 }
 
@@ -392,8 +369,6 @@ export async function GET(req: Request) {
       windKph: Math.round(wind),
       gustKph: Math.round(gust),
       precipMm,
-      pop: Math.round((b.pop ?? 0) * 100), // OWM gives 0–1, convert to 0–100%
-      humidity: b.main.humidity ?? null,
       conditions: b.weather?.[0]?.main ?? null,
       inDaylight: dt >= daylightStart && dt <= daylightEnd,
       golf,
@@ -406,10 +381,7 @@ export async function GET(req: Request) {
   const todayDaylight = todayAll.filter((b) => b.inDaylight);
 
   // Recent ground wetness (past 24/48h precip) + drying proxy -> greens speed / fairway rollout.
-  const [{ past24, past48 }, dailyUVMap] = await Promise.all([
-    getPastPrecipMm(Number(lat), Number(lon)),
-    getDailyUV(Number(lat), Number(lon)),
-  ]);
+  const { past24, past48 } = await getPastPrecipMm(Number(lat), Number(lon));
   const ground = computeGroundSignals({ past24, past48, todayBlocks: todayAll });
 
   // Tee-time window constraints (local server time):
@@ -458,10 +430,6 @@ export async function GET(req: Request) {
     const windMax = Math.max(...dayBlocks.map((b) => b.windKph));
     const gustMax = Math.max(...dayBlocks.map((b) => b.gustKph));
     const precipTotal = dayBlocks.reduce((sum, b) => sum + (b.precipMm ?? 0), 0);
-    const popMax = Math.max(...dayBlocks.map((b) => b.pop ?? 0)); // highest chance of rain across all blocks
-    const humidityAvg = Math.round(
-      dayBlocks.reduce((sum, b) => sum + (b.humidity ?? 0), 0) / dayBlocks.length
-    );
 
     const rep = dayBlocks[Math.floor(dayBlocks.length / 2)];
     const conditions = rep?.conditions ?? null;
@@ -512,14 +480,11 @@ export async function GET(req: Request) {
     return {
       dateKey: key,
       dayLabel: dayBlocks[0]?.dayLabel ?? key,
-      uvIndex: dailyUVMap[key] ?? null,
       minTemp: Number.isFinite(minTemp) ? minTemp : null,
       maxTemp: Number.isFinite(maxTemp) ? maxTemp : null,
       windMax: Number.isFinite(windMax) ? windMax : null,
       gustMax: Number.isFinite(gustMax) ? gustMax : null,
       precipTotalMm: Math.round(precipTotal * 10) / 10,
-      pop: Number.isFinite(popMax) ? popMax : null,
-      humidity: Number.isFinite(humidityAvg) ? humidityAvg : null,
       conditions,
       ground: dayGround,
       golf: {
@@ -559,9 +524,8 @@ export async function GET(req: Request) {
       windKph: Math.round(msToKph(current.wind?.speed ?? 0)),
       windDeg: current.wind?.deg ?? null,
       gustKph: Math.round(msToKph(current.wind?.gust ?? 0)),
-      humidity: current.main.humidity ?? null,
       conditions: current.weather?.[0]?.main ?? null,
-      uvIndex: currentUV ?? dailyUVMap[dayKeys[0]] ?? null,
+      uvIndex: currentUV,
     },
 
     golf: bestTodayBlock?.golf ?? null,
