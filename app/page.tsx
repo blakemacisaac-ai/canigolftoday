@@ -521,6 +521,16 @@ export default function HomePage() {
   const bestWindowText = useMemo(() => {
   const tzOffsetSec = inferredTzOffsetSec;
 
+  // Don't show best window for RED (not golfable) days
+  const isToday = selectedDay === 0;
+  const dayVerdict = isToday 
+    ? (weather?.golf?.verdict ?? weather?.daily?.[0]?.golf?.verdict) 
+    : (selectedDaily?.golf?.verdict);
+  
+  if (dayVerdict === "RED") {
+    return null;
+  }
+
   // Format a unix dt in the destination/course timezone (not the viewer's browser timezone).
   const fmt = (dtSec: number) =>
     new Date((dtSec + tzOffsetSec) * 1000).toLocaleTimeString([], {
@@ -529,8 +539,6 @@ export default function HomePage() {
       hour12: true,
       timeZone: "UTC",
     });
-
-  const isToday = selectedDay === 0;
 
   // Resolve blocks for the chosen day.
   let rawBlocks: any = isToday 
