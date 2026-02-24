@@ -10,6 +10,32 @@ type Prediction = {
   address?: string | null;
 };
 
+// Business/store keywords — if a "city" result contains these it's not a city
+const BUSINESS_KEYWORDS = [
+  "tire", "walmart", "costco", "home depot", "shoppers", "tim horton",
+  "mcdonald", "subway", "starbucks", "gas+", "pharmacy", "bank", "hotel",
+  "motel", "inn ", "mall", "plaza", "store", "shop", "market", "grocery",
+  "liquor", "beer store", "pizza", "station", "depot", "auto",
+];
+
+function looksLikeBusiness(description: string): boolean {
+  const lower = description.toLowerCase();
+  return BUSINESS_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+// A valid city result should have at least a country component
+// Google city predictions look like "Toronto, ON, Canada" or "Paris, France"
+// Business results look like "Canadian Tire — 950 Tower St S, Fergus, ON"
+function looksLikeCity(description: string): boolean {
+  // Must contain a comma (city, region or city, country)
+  if (!description.includes(",")) return false;
+  // Must NOT look like a street address (contains a number at the start)
+  if (/^\d/.test(description.trim())) return false;
+  // Must NOT look like a business
+  if (looksLikeBusiness(description)) return false;
+  return true;
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const input = (searchParams.get("q") || "").trim();
@@ -23,18 +49,17 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing GOOGLE_PLACES_API_KEY" }, { status: 500 });
   }
 
-  // 1) Cities-only autocomplete (legacy Places Autocomplete endpoint)
+  // 1) Cities-only autocomplete — restricted to locality/sublocality types
   const citiesUrl =
     `https://maps.googleapis.com/maps/api/place/autocomplete/json` +
     `?input=${encodeURIComponent(input)}` +
     `&types=(cities)` +
     `&key=${encodeURIComponent(key)}`;
 
-  // 2) Courses (Places Text Search)
-  // Text Search is better for named course lookup (Torrey Pines, Glen Abbey, etc.)
+  // 2) Golf courses (Places Text Search)
   const coursesUrl =
     `https://maps.googleapis.com/maps/api/place/textsearch/json` +
-    `?query=${encodeURIComponent(input)}` +
+    `?query=${encodeURIComponent(input + " golf course")}` +
     `&type=golf_course` +
     `&key=${encodeURIComponent(key)}`;
 
@@ -66,21 +91,28 @@ export async function GET(req: Request) {
     );
   }
 
-  const cityPreds: Prediction[] = (citiesData.predictions ?? []).slice(0, 5).map((p: any) => ({
-    kind: "city",
-    placeId: String(p?.place_id ?? ""),
-    description: String(p?.description ?? ""),
-  }));
+  const cityPreds: Prediction[] = (citiesData.predictions ?? [])
+    .filter((p: any) => {
+      const desc = String(p?.description ?? "");
+      // Only include results that look like real cities
+      return looksLikeCity(desc);
+    })
+    .slice(0, 4)
+    .map((p: any) => ({
+      kind: "city" as Kind,
+      placeId: String(p?.place_id ?? ""),
+      description: String(p?.description ?? ""),
+    }));
 
   const coursePreds: Prediction[] = (coursesData.results ?? []).slice(0, 5).map((r: any) => ({
-    kind: "course",
+    kind: "course" as Kind,
     placeId: String(r?.place_id ?? ""),
     description: `${r?.name ?? "Course"}${r?.formatted_address ? ` — ${r.formatted_address}` : ""}`,
     name: r?.name ?? null,
     address: r?.formatted_address ?? null,
   }));
 
-  // Merge + dedupe by placeId (and drop any empties)
+  // Merge: courses first, then cities — dedupe by placeId
   const seen = new Set<string>();
   const merged = [...coursePreds, ...cityPreds].filter((p) => {
     if (!p.placeId || !p.description) return false;

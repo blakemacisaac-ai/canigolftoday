@@ -340,21 +340,28 @@ export default function HomePage() {
   const [showAllCourses, setShowAllCourses] = useState(false);
   const [showScoreExplainer, setShowScoreExplainer] = useState(false);
 
-  // Animated social proof counter
-  const TARGET_COUNT = 1247;
+  // Animated social proof counter — real visitor count from API
   const [counterVal, setCounterVal] = useState(0);
   useEffect(() => {
-    let start: number | null = null;
-    const duration = 1800;
-    const step = (ts: number) => {
-      if (!start) start = ts;
-      const progress = Math.min((ts - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setCounterVal(Math.floor(eased * TARGET_COUNT));
-      if (progress < 1) requestAnimationFrame(step);
-    };
-    const raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
+    fetch("/api/visitors", { method: "POST" })
+      .then((r) => r.json())
+      .then((data) => {
+        const target = typeof data.count === "number" ? data.count : 0;
+        if (target === 0) return;
+        let start: number | null = null;
+        const duration = 1800;
+        const step = (ts: number) => {
+          if (!start) start = ts;
+          const progress = Math.min((ts - start) / duration, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          setCounterVal(Math.floor(eased * target));
+          if (progress < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      })
+      .catch(() => {
+        // Silently fail — counter just stays at 0
+      });
   }, []);
 
   // One-time query param bootstrap (supports landing pages like /city/toronto)
@@ -712,20 +719,13 @@ export default function HomePage() {
   return result;
 }, [selectedDaily, selectedDay, weather, inferredTzOffsetSec]);
 
-const shareText = useMemo(() => {
-    const score = teeTimeResult?.score ?? selectedDaily?.golf?.score ?? weather?.golf?.score ?? null;
-    const verdict = verdictLabel ?? "Golf forecast";
-    const where = cityQuery?.trim() ? cityQuery.trim() : "your area";
-    const parts = [
-      `${verdict}${score != null ? ` (${score}/100)` : ""} — ${where}`,
-      bestWindowText ? `Best window: ${bestWindowText}` : null,
-      windSummaryText ? `Wind: ${windSummaryText}` : null,
-      greensBadgeText ? `Greens: ${greensBadgeText}` : null,
-      rolloutBadgeText ? `Rollout: ${rolloutBadgeText}` : null,
-      `CanIGolfToday.com`,
-    ].filter(Boolean);
-    return parts.join(" • ");
-  }, [teeTimeResult, selectedDaily, weather, verdictLabel, cityQuery, bestWindowText, windSummaryText, greensBadgeText, rolloutBadgeText]);
+const shareUrl = useMemo(() => {
+    const where = cityQuery?.trim();
+    if (!where) return "https://canigolftoday.com";
+    const params = new URLSearchParams({ q: where });
+    if (selectedDay !== 0) params.set("day", String(selectedDay));
+    return `https://canigolftoday.com/?${params.toString()}`;
+  }, [cityQuery, selectedDay]);
 
 
 
@@ -1715,16 +1715,24 @@ return {
   type="button"
   onClick={async () => {
     try {
-      await navigator.clipboard.writeText(shareText);
-      setCopied(true);
+      if (navigator.share) {
+        await navigator.share({
+          title: "Can I Golf Today?",
+          text: `Check golf conditions in ${cityQuery?.trim() || "this area"}`,
+          url: shareUrl,
+        });
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        setCopied(true);
+      }
     } catch {
-      // no-op
+      // user cancelled or no-op
     }
   }}
   className="ml-1 inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/80 hover:bg-white/10"
-  title="Copy a shareable summary"
+  title="Share conditions"
 >
-  {copied ? "Copied" : "Share"}
+  {copied ? "Copied!" : "Share"}
 </button>
 
   </div>
