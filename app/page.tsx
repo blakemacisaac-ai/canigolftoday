@@ -479,7 +479,7 @@ export default function HomePage() {
   const verdictLabel = useMemo(() => {
     const v = showVerdict;
     if (!v) return null;
-    if (v === "GREEN") return "Green light";
+    if (v === "GREEN") return "Book it";
     if (v === "YELLOW") return "Playable";
     return "Not golfable";
   }, [showVerdict]);
@@ -1070,7 +1070,7 @@ return {
 
   const confidenceLine = useMemo(() => {
     const v = showVerdict;
-    if (v === "GREEN") return "Book it with confidence.";
+    if (v === "GREEN") return "Perfect conditions.";
     if (v === "YELLOW") return "Playable if you catch the window.";
     if (v === "RED") return "Courses are likely closed or unpleasant.";
     return null;
@@ -1566,7 +1566,7 @@ return {
                   <div className="flex items-start gap-3">
                     <span className="text-lg">🟢</span>
                     <div>
-                      <div className="text-sm font-semibold text-white/90">80–100 · Green light</div>
+                      <div className="text-sm font-semibold text-white/90">80–100 · Book it</div>
                       <div className="text-sm text-white/55">Great conditions. Book it.</div>
                     </div>
                   </div>
