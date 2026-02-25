@@ -342,6 +342,7 @@ export default function HomePage() {
   const [searching, setSearching] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const suppressAutocomplete = useRef(false);
+  const daysScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Selected day (0..4)
   const [selectedDay, setSelectedDay] = useState<number>(0);
@@ -538,6 +539,13 @@ export default function HomePage() {
     return 0;
   }, [weather]);
 
+  // Current local hour in the destination timezone — used to dim past buckets
+  const nowLocalHour = useMemo(() => {
+    if (selectedDay !== 0) return -1; // only relevant for today
+    const nowUtc = Math.floor(Date.now() / 1000);
+    return new Date((nowUtc + inferredTzOffsetSec) * 1000).getUTCHours();
+  }, [selectedDay, inferredTzOffsetSec]);
+
   const bestWindowText = useMemo(() => {
   const tzOffsetSec = inferredTzOffsetSec;
 
@@ -566,6 +574,9 @@ export default function HomePage() {
     : (selectedDaily?.blocks ?? null);
   if (rawBlocks && !Array.isArray(rawBlocks) && typeof rawBlocks === "object") rawBlocks = Object.values(rawBlocks);
   const blocks: any[] = Array.isArray(rawBlocks) ? rawBlocks : [];
+
+  // For today: only consider blocks from now onwards
+  const nowUtcSec = isToday ? Math.floor(Date.now() / 1000) : null;
 
   // Sunrise/sunset bounds for TODAY (destination).
   const sunriseDt = isToday && typeof weather?.daylight?.sunrise === "number" ? weather.daylight.sunrise : null;
@@ -632,7 +643,11 @@ export default function HomePage() {
   };
 
   // 1) Try to resolve startDt/endDt from API window.
-  let startDt: number | null = startDtFromApi;
+  //    If it's already in the past (for today), discard it so we recompute.
+  let startDt: number | null =
+    startDtFromApi != null && nowUtcSec != null && startDtFromApi < nowUtcSec - 1800
+      ? null
+      : startDtFromApi;
   if (startDt == null && labelStart && blocks.length > 0) {
     const b = blocks.find((x: any) => typeof x?.dt === "number" && (x?.label === labelStart));
     if (typeof b?.dt === "number") startDt = b.dt;
@@ -646,7 +661,8 @@ export default function HomePage() {
     const pool = blocks
       .filter((b: any) => typeof b?.dt === "number" && typeof b?.score === "number")
       .filter((b: any) => b?.inDaylight !== false)
-      .filter((b: any) => isValidStart(b.dt));
+      .filter((b: any) => isValidStart(b.dt))
+      .filter((b: any) => nowUtcSec == null || b.dt >= nowUtcSec - 1800); // only future blocks (30min grace)
 
     const best = pool.reduce((acc: any, b: any) => (!acc || b.score > acc.score ? b : acc), null);
 
@@ -726,7 +742,7 @@ export default function HomePage() {
     if (typeof b?.score === "number") avg = b.score;
   }
 
-  const avgSuffix = typeof avg === "number" ? ` (avg ${Math.round(avg)}/100)` : "";
+  const avgSuffix = ""; // avg score removed from display — shown prominently above
   const result = `${startStr} – ${endStr}${avgSuffix}`;
   
   return result;
@@ -1203,25 +1219,25 @@ return {
     const gap = 80 - showScore;
     
     if (typeof windKph === "number" && windKph >= 20) {
-      return `💨 Wind ${windKph}km/h is pushing you below 80. Otherwise solid day.`;
+      return `💨 Wind ${windKph} km/h is the limiting factor today.`;
     }
 
     if (typeof tempC === "number") {
       if (tempC <= 8) {
-        return `🧊 Temp ${tempC}°C is a bit chilly for green-light status. Otherwise decent.`;
+        return `🧊 Temp ${tempC}°C is keeping it from green — dress warm.`;
       }
       if (tempC >= 30) {
-        return `🌡 Temp ${tempC}°C is keeping it from green. Otherwise playable.`;
+        return `🌡 Heat (${tempC}°C) is the limiting factor today.`;
       }
     }
 
     const cond = typeof conditions === "string" ? conditions.toLowerCase() : "";
     if (cond.includes("cloud") || cond.includes("overcast")) {
-      return `☁️ Cloudy conditions are the main factor. Otherwise a good day.`;
+      return `☁️ Cloud cover is keeping this from green — otherwise solid.`;
     }
 
     if (gap <= 5) {
-      return `Just ${gap} points from green — marginal conditions.`;
+      return `Just ${gap} pts from green — close call.`;
     }
 
     return null;
@@ -1683,7 +1699,7 @@ return {
                       </div>
                     )}
 
-                    {confidenceLine && (
+                    {confidenceLine && showVerdict !== "YELLOW" && (
                       <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>
                     )}
 
@@ -1701,7 +1717,7 @@ return {
                       </div>
                     )}
 
-                    {showVerdict === "YELLOW" && yellowReasonChips.length > 0 && (
+                    {showVerdict === "YELLOW" && !yellowLimitingFactor && yellowReasonChips.length > 0 && (
                       <div className="mt-3 flex gap-2 overflow-x-auto pb-2 scrollbar-none">
                         {yellowReasonChips.map((c) => (
                           <Chip key={c}>{c}</Chip>
@@ -1798,24 +1814,34 @@ return {
                     <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">How the day plays out</div>
                     <div className="flex gap-2 flex-wrap">
                       {[
-                        { key: "morning", label: "Morning" },
-                        { key: "midday", label: "Midday" },
-                        { key: "late", label: "Late" },
-                      ].map(({ key, label }) => {
+                        { key: "morning", label: "Morning", endHour: 11 },
+                        { key: "midday",  label: "Midday",  endHour: 15 },
+                        { key: "late",    label: "Late",    endHour: 24 },
+                      ].map(({ key, label, endHour }) => {
                         const s = playOut?.segments?.find((x: any) => x.key === key)?.score;
                         const isBest = playOut?.bestBucket === key;
+                        // Dim bucket if we're past its window (today only)
+                        const isPast = selectedDay === 0 && nowLocalHour >= endHour;
                         const rating = isBest ? "Best window" : s == null ? "—" : key === "late" ? (s >= 65 ? "Holds up" : "Falls off") : (s >= 80 ? "Excellent" : s >= 60 ? "Decent" : "Challenging");
                         return (
                           <div
                             key={key}
-                            className={`flex-1 min-w-[90px] rounded-2xl px-3 py-2.5 text-sm text-center border ${
-                              isBest
+                            className={`flex-1 min-w-[90px] rounded-2xl px-3 py-2.5 text-sm text-center border transition-opacity ${
+                              isPast
+                                ? "bg-white/3 border-white/5 opacity-40"
+                                : isBest
                                 ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
                                 : "bg-white/5 border-white/10 text-white/70"
                             }`}
                           >
-                            <div className="text-xs font-semibold text-white/50 mb-0.5">{label}</div>
-                            <div className={`text-sm font-semibold ${isBest ? "text-emerald-300" : "text-white/85"}`}>{rating}</div>
+                            <div className={`text-xs font-semibold mb-0.5 ${isPast ? "text-white/30" : "text-white/50"}`}>
+                              {label}{isPast ? " · done" : ""}
+                            </div>
+                            <div className={`text-sm font-semibold ${
+                              isPast ? "line-through text-white/25" : isBest ? "text-emerald-300" : "text-white/85"
+                            }`}>
+                              {rating}
+                            </div>
                           </div>
                         );
                       })}
@@ -1882,26 +1908,27 @@ return {
 
                 {Array.isArray(weather?.daily) && weather.daily.length > 0 && (
                   <div className="mt-5">
-                    <div className="text-xs font-semibold text-white/50 uppercase tracking-wider">Next 5 days</div>
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">Next 5 days</div>
+                    <div className="relative group/days">
+                      {/* Left arrow - desktop only */}
+                      <button
+                        className="hidden md:flex absolute -left-3 top-1/2 -translate-y-1/2 z-10 h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/10 text-white/60 hover:bg-white/20 hover:text-white transition opacity-0 group-hover/days:opacity-100"
+                        onClick={() => daysScrollRef.current?.scrollBy({ left: -176, behavior: "smooth" })}
+                      >
+                        ‹
+                      </button>
+                      <div ref={daysScrollRef} className="flex gap-2 overflow-x-auto -mx-1 px-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
                       {weather.daily.slice(0, 5).map((d: any, idx: number) => {
                         const v = d?.golf?.verdict;
                         const dot = v === "GREEN" ? "🟢" : v === "YELLOW" ? "🟡" : "🔴";
                         const active = idx === selectedDay;
-
-                        const dayGreens = d?.ground?.greensSpeed?.label
-                          ? cleanGroundLabel(d.ground.greensSpeed.label)
-                          : null;
-                        const dayRoll = d?.ground?.fairwayRollout?.label
-                          ? cleanGroundLabel(d.ground.fairwayRollout.label)
-                          : null;
 
                         return (
                           <button
                             key={d.dateKey || idx}
                             onClick={() => setSelectedDay(idx)}
                             className={[
-                              "rounded-2xl border px-4 py-3 text-left text-sm transition flex-shrink-0 min-w-[140px] md:min-w-0",
+                              "flex-shrink-0 w-40 rounded-2xl border px-3 py-3 text-left text-sm transition",
                               active
                                 ? "border-white/30 bg-white/10"
                                 : "border-white/10 bg-white/5 hover:bg-white/10",
@@ -1911,19 +1938,28 @@ return {
                               <span>{dot}</span>
                               <span className="font-semibold">{idx === 0 ? "Today" : d.dayLabel}</span>
                             </div>
-                            <div className="mt-1 text-xs text-white/65">
-                              {d.maxTemp ?? "—"}° / {d.minTemp ?? "—"}° · wind{" "}
-                              {d.windMax ?? "—"}k
-                              <span className="text-white/50"> (gust {d.gustMax ?? "—"}k)</span>
+                            <div className="mt-1.5 text-xs text-white/65">
+                              {d.maxTemp ?? "—"}° / {d.minTemp ?? "—"}°
+                            </div>
+                            <div className="mt-0.5 text-xs text-white/50">
+                              Wind {d.windMax ?? "—"}k
                             </div>
                             {d.pop != null && (
-                              <div className="mt-1 text-xs text-white/50">
+                              <div className="mt-0.5 text-xs text-white/45">
                                 🌧 {d.pop}% · 💧 {d.humidity ?? "—"}%
                               </div>
                             )}
                           </button>
                         );
                       })}
+                      </div>
+                      {/* Right arrow - desktop only */}
+                      <button
+                        className="hidden md:flex absolute -right-3 top-1/2 -translate-y-1/2 z-10 h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/10 text-white/60 hover:bg-white/20 hover:text-white transition opacity-0 group-hover/days:opacity-100"
+                        onClick={() => daysScrollRef.current?.scrollBy({ left: 176, behavior: "smooth" })}
+                      >
+                        ›
+                      </button>
                     </div>
                   </div>
                 )}
