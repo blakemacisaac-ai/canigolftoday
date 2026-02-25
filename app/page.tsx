@@ -51,6 +51,19 @@ function windDirFromDeg(deg: number | null | undefined): string {
   return `${arrows[index]} ${dirs[index]}`;
 }
 
+function cleanCityLabel(address: string): string {
+  if (!address) return address;
+  if (/^\d/.test(address.trim())) {
+    const parts = address.split(",").map((s: string) => s.trim());
+    if (parts.length >= 3) {
+      const city = parts[1];
+      const stateZip = parts[2].replace(/\s\d{5}(-\d{4})?/, "").trim();
+      return `${city}, ${stateZip}`;
+    }
+  }
+  return address;
+}
+
 function Chip({ children }: { children: React.ReactNode }) {
   return (
     <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/80">
@@ -869,6 +882,20 @@ const sunriseSunsetText = useMemo(() => {
   return `Sunset ${sunset}`;
 }, [weather?.daylight]);
 
+const sunriseText = useMemo(() =>
+  weather?.daylight?.sunriseLabel ??
+  (weather?.daylight?.sunrise
+    ? new Date(weather.daylight.sunrise * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : null),
+[weather?.daylight]);
+
+const sunsetText = useMemo(() =>
+  weather?.daylight?.sunsetLabel ??
+  (weather?.daylight?.sunset
+    ? new Date(weather.daylight.sunset * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : null),
+[weather?.daylight]);
+
 
 
   // Ground / greens signals (computed server-side using recent precip history where available)
@@ -1359,7 +1386,7 @@ return {
         return;
       }
 
-      setCityQuery(data?.address || p.description);
+      setCityQuery(cleanCityLabel(data?.address || p.description));
 
       const c = { lat: Number(data.lat), lon: Number(data.lon) };
       setCoords(c);
@@ -1397,7 +1424,7 @@ return {
 
       // Set city query AFTER resolving to the final address, then clear dropdown
       suppressAutocomplete.current = true;
-      setCityQuery(rdata?.address || label);
+      setCityQuery(cleanCityLabel(rdata?.address || label));
       setPredictions([]);
       const c = { lat: Number(rdata.lat), lon: Number(rdata.lon) };
       setCoords(c);
@@ -1495,9 +1522,10 @@ return {
                     <button
                       key={p.placeId}
                       onClick={() => choosePrediction(p)}
-                      className="block w-full px-4 py-3 text-left text-sm text-white/90 hover:bg-white/5"
+                      className="flex items-center gap-3 w-full px-4 py-3 text-left text-sm text-white/90 hover:bg-white/5"
                     >
-                      {p.description}
+                      <span className="text-base shrink-0">{p.kind === "course" ? "⛳" : "📍"}</span>
+                      <span className="truncate">{p.description}</span>
                     </button>
                   ))}
                 </div>
@@ -1661,7 +1689,7 @@ return {
 
                     {carryChangeText && (
                       <div className="mt-3">
-                        <Chip>🏌️ Ball flight: {carryChangeText} vs typical</Chip>
+                        <Chip>🌡️ {carryChangeText} carry vs typical</Chip>
                       </div>
                     )}
 
@@ -1682,16 +1710,13 @@ return {
                     )}
 
                     {/* Frost warning and rain chance - show for all verdicts */}
-                    {(frostWarning || rainChance || uvWarning) && (
+                    {(frostWarning || rainChance) && (
                       <div className="mt-3 flex gap-2 overflow-x-auto pb-2 scrollbar-none">
                         {frostWarning && (
                           <Chip>{frostWarning}</Chip>
                         )}
                         {rainChance && (
                           <Chip>🌧 {rainChance}</Chip>
-                        )}
-                        {uvWarning && (
-                          <Chip>{uvWarning}</Chip>
                         )}
                       </div>
                     )}
@@ -1700,86 +1725,101 @@ return {
 
                 
 {(bestWindowText || sunriseSunsetText) && (
-  <div className="mt-4 inline-flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl bg-white/10 px-4 py-2 text-sm text-white/85">
-    {bestWindowText && (
-      <>
-        <span className="text-white/70">Best tee-time window</span>
-        <span className="font-semibold">{bestWindowText}</span>
-      </>
-    )}
-    {sunriseSunsetText && (
-      <span className="text-white/60">{sunriseSunsetText}</span>
-    )}
+  <div className="mt-4 rounded-2xl bg-white/10 px-4 py-3 text-sm">
+    {/* Row 1: best window + share */}
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-base">⛳</span>
+        <span className="text-white/60">Best window</span>
+        {bestWindowText && (
+          <span className="font-semibold text-white">{bestWindowText}</span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={async () => {
+          try {
+            if (navigator.share) {
+              await navigator.share({
+                title: "Can I Golf Today?",
+                text: `Check golf conditions in ${cityQuery?.trim() || "this area"}`,
+                url: shareUrl,
+              });
+            } else {
+              await navigator.clipboard.writeText(shareUrl);
+              setCopied(true);
+            }
+          } catch {
+            // user cancelled or no-op
+          }
+        }}
+        className="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/80 hover:bg-white/15 transition"
+        title="Share conditions"
+      >
+        {copied ? "Copied!" : "Share ↗"}
+      </button>
+    </div>
 
-<button
-  type="button"
-  onClick={async () => {
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: "Can I Golf Today?",
-          text: `Check golf conditions in ${cityQuery?.trim() || "this area"}`,
-          url: shareUrl,
-        });
-      } else {
-        await navigator.clipboard.writeText(shareUrl);
-        setCopied(true);
-      }
-    } catch {
-      // user cancelled or no-op
-    }
-  }}
-  className="ml-1 inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-white/80 hover:bg-white/10"
-  title="Share conditions"
->
-  {copied ? "Copied!" : "Share"}
-</button>
-
+    {/* Row 2: sunrise / sunset */}
+    {(sunriseText || sunsetText) && (
+      <div className="mt-2 flex items-center gap-3 text-xs text-white/50">
+        {sunriseText && <span>🌅 {sunriseText}</span>}
+        {sunriseText && sunsetText && <span>·</span>}
+        {sunsetText && <span>🌇 {sunsetText}</span>}
+      </div>
+    )}
   </div>
 )}
 
                 
-                {showVerdict !== "RED" && (
-                  <div className="mt-4 rounded-2xl bg-white/5 p-4 ring-1 ring-white/10">
-                    <div className="text-sm font-semibold text-white/90">How the day plays out</div>
+                <div className="mt-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="text-sm text-white/70">Tee time (optional)</div>
 
-                    <ul className="mt-3 space-y-2 text-sm text-white/80">
-                      <li>
-                        <span className="font-semibold text-white/90">Morning</span> —{" "}
-                        {(() => {
-                          const s = playOut?.segments?.find((x: any) => x.key === "morning")?.score;
-                          if (playOut?.bestBucket === "morning") {
-                            return <span className="font-semibold text-emerald-300">Best window</span>;
-                          }
-                          if (s == null) return "—";
-                          return s >= 80 ? "Excellent" : s >= 60 ? "Decent" : "Challenging";
-                        })()}
-                      </li>
+                    <input
+                      type="time"
+                      value={teeTime}
+                      onChange={(e) => setTeeTime(e.target.value)}
+                      className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-white outline-none focus:border-white/25"
+                    />
 
-                      <li>
-                        <span className="font-semibold text-white/90">Midday</span> —{" "}
-                        {(() => {
-                          const s = playOut?.segments?.find((x: any) => x.key === "midday")?.score;
-                          if (playOut?.bestBucket === "midday") {
-                            return <span className="font-semibold text-emerald-300">Best window</span>;
-                          }
-                          if (s == null) return "—";
-                          return s >= 80 ? "Excellent" : s >= 60 ? "Decent" : "Challenging";
-                        })()}
-                      </li>
+                    {teeTime && (
+                      <button
+                        onClick={() => setTeeTime("")}
+                        className="text-sm text-white/60 underline decoration-white/30 hover:text-white"
+                      >
+                        clear
+                      </button>
+                    )}
+                  </div>
 
-                      <li>
-                        <span className="font-semibold text-white/90">Late</span> —{" "}
-                        {(() => {
-                          const s = playOut?.segments?.find((x: any) => x.key === "late")?.score;
-                          if (playOut?.bestBucket === "late") {
-                            return <span className="font-semibold text-emerald-300">Best window</span>;
-                          }
-                          if (s == null) return "—";
-                          return s >= 65 ? "Holds up" : "Falls off";
-                        })()}
-                      </li>
-                    </ul>
+                {showVerdict !== "RED" && playOut?.segments && (
+                  <div className="mt-4">
+                    <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">How the day plays out</div>
+                    <div className="flex gap-2 flex-wrap">
+                      {[
+                        { key: "morning", label: "Morning" },
+                        { key: "midday", label: "Midday" },
+                        { key: "late", label: "Late" },
+                      ].map(({ key, label }) => {
+                        const s = playOut?.segments?.find((x: any) => x.key === key)?.score;
+                        const isBest = playOut?.bestBucket === key;
+                        const rating = isBest ? "Best window" : s == null ? "—" : key === "late" ? (s >= 65 ? "Holds up" : "Falls off") : (s >= 80 ? "Excellent" : s >= 60 ? "Decent" : "Challenging");
+                        return (
+                          <div
+                            key={key}
+                            className={`flex-1 min-w-[90px] rounded-2xl px-3 py-2.5 text-sm text-center border ${
+                              isBest
+                                ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                                : "bg-white/5 border-white/10 text-white/70"
+                            }`}
+                          >
+                            <div className="text-xs font-semibold text-white/50 mb-0.5">{label}</div>
+                            <div className={`text-sm font-semibold ${isBest ? "text-emerald-300" : "text-white/85"}`}>{rating}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 
@@ -1809,40 +1849,10 @@ return {
                       </div>
                     )}
 
-                    {(selectedGround?.past48hPrecipMm != null || selectedGround?.past24hPrecipMm != null) && (
-                      <div className="md:col-span-2 text-xs text-white/55">
-                        Recent precip: {selectedGround?.past24hPrecipMm ?? "—"}mm (24h) · {selectedGround?.past48hPrecipMm ?? "—"}mm (48h)
-                      </div>
-                    )}
-
-                    {selectedGround?.forecast48hWetnessMm != null && (
-                      <div className="md:col-span-2 text-xs text-white/55">
-                        Wetness proxy: {selectedGround.forecast48hWetnessMm}mm (prior 48h forecast window)
-                      </div>
-                    )}
                   </div>
                 )}
 
-                <div className="mt-4">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="text-sm text-white/70">Tee time (optional)</div>
 
-                    <input
-                      type="time"
-                      value={teeTime}
-                      onChange={(e) => setTeeTime(e.target.value)}
-                      className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-white outline-none focus:border-white/25"
-                    />
-
-                    {teeTime && (
-                      <button
-                        onClick={() => setTeeTime("")}
-                        className="text-sm text-white/60 underline decoration-white/30 hover:text-white"
-                      >
-                        clear
-                      </button>
-                    )}
-                  </div>
 
                   {teeTimeWarning && (
                     <div className="mt-3 rounded-2xl bg-amber-500/15 border border-amber-500/30 px-4 py-2.5 text-sm text-amber-200">
@@ -1919,7 +1929,7 @@ return {
                 )}
               </div>
 
-              <div className="rounded-3xl bg-white/5 p-5 text-sm text-white/80 ring-1 ring-white/10 md:min-w-[240px] md:self-start order-first md:order-last">
+              <div className="rounded-3xl bg-white/5 p-5 text-sm text-white/80 ring-1 ring-white/10 md:min-w-[240px] md:self-start order-last">
                 {selectedDay === 0 ? (
                   <>
                     <div className="flex justify-between gap-6">
@@ -1956,7 +1966,7 @@ return {
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">UV Index</span>
                         <span>
-                          {weather?.current?.uvIndex ?? weather?.daily?.[0]?.uvIndex}
+                          {Math.round(weather?.current?.uvIndex ?? weather?.daily?.[0]?.uvIndex)}
                           <span className="text-white/50 ml-1.5">
                             {(() => {
                               const uv = weather?.current?.uvIndex ?? weather?.daily?.[0]?.uvIndex;
@@ -2011,7 +2021,7 @@ return {
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">UV Index</span>
                         <span>
-                          {selectedDaily.uvIndex}
+                          {Math.round(selectedDaily.uvIndex)}
                           <span className="text-white/50 ml-1.5">
                             {(() => {
                               const uv = selectedDaily.uvIndex;
