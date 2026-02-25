@@ -1689,7 +1689,7 @@ return {
 
                     {carryChangeText && (
                       <div className="mt-3">
-                        <Chip>🌡️ {carryChangeText} carry vs typical</Chip>
+                        <Chip>{carryChangeText} carry vs typical</Chip>
                       </div>
                     )}
 
@@ -1763,18 +1763,18 @@ return {
     {/* Row 2: sunrise / sunset */}
     {(sunriseText || sunsetText) && (
       <div className="mt-2 flex items-center gap-3 text-xs text-white/50">
-        {sunriseText && <span>🌅 {sunriseText}</span>}
-        {sunriseText && sunsetText && <span>·</span>}
-        {sunsetText && <span>🌇 {sunsetText}</span>}
+        {sunriseText && <span>↑ Sunrise {sunriseText}</span>}
+        {sunriseText && sunsetText && <span className="text-white/20">·</span>}
+        {sunsetText && <span>↓ Sunset {sunsetText}</span>}
       </div>
     )}
   </div>
 )}
 
                 
-                <div className="mt-4">
+                <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                   <div className="flex flex-wrap items-center gap-3">
-                    <div className="text-sm text-white/70">Tee time (optional)</div>
+                    <div className="text-xs font-semibold text-white/50 uppercase tracking-wider">Tee time</div>
 
                     <input
                       type="time"
@@ -1882,7 +1882,7 @@ return {
 
                 {Array.isArray(weather?.daily) && weather.daily.length > 0 && (
                   <div className="mt-5">
-                    <div className="text-xs font-semibold text-white/60">Next 5 days</div>
+                    <div className="text-xs font-semibold text-white/50 uppercase tracking-wider">Next 5 days</div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {weather.daily.slice(0, 5).map((d: any, idx: number) => {
                         const v = d?.golf?.verdict;
