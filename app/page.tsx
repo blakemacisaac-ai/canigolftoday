@@ -1354,7 +1354,7 @@ return {
 
   useEffect(() => {
     const q = cityQuery.trim();
-    if (q.length < 2) {
+    if (q.length < 3) {
       setPredictions([]);
       return;
     }
@@ -1373,7 +1373,7 @@ return {
       } finally {
         setSearching(false);
       }
-    }, 250);
+    }, 350);
 
     return () => clearTimeout(t);
   }, [cityQuery]);
