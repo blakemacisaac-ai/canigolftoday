@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
 
+/**
+ * Search/Autocomplete API - Migrated to Places API (New)
+ * Cities: uses Autocomplete v1 (new)
+ * Courses: uses searchText v1 (new) with field masking
+ *
+ * Cost tip: debounce this on the frontend (300-500ms) to avoid
+ * firing on every keystroke — each call hits 2 APIs simultaneously.
+ */
+
 type Kind = "city" | "course";
 
 type Prediction = {
@@ -10,7 +19,6 @@ type Prediction = {
   address?: string | null;
 };
 
-// Business/store keywords — if a "city" result contains these it's not a city
 const BUSINESS_KEYWORDS = [
   "tire", "walmart", "costco", "home depot", "shoppers", "tim horton",
   "mcdonald", "subway", "starbucks", "gas+", "pharmacy", "bank", "hotel",
@@ -23,18 +31,15 @@ function looksLikeBusiness(description: string): boolean {
   return BUSINESS_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
-// A valid city result should have at least a country component
-// Google city predictions look like "Toronto, ON, Canada" or "Paris, France"
-// Business results look like "Canadian Tire — 950 Tower St S, Fergus, ON"
 function looksLikeCity(description: string): boolean {
-  // Must contain a comma (city, region or city, country)
   if (!description.includes(",")) return false;
-  // Must NOT look like a street address (contains a number at the start)
   if (/^\d/.test(description.trim())) return false;
-  // Must NOT look like a business
   if (looksLikeBusiness(description)) return false;
   return true;
 }
+
+// Only request fields we use — Basic tier pricing
+const COURSE_FIELD_MASK = "places.id,places.displayName,places.formattedAddress";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -49,67 +54,60 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing GOOGLE_PLACES_API_KEY" }, { status: 500 });
   }
 
-  // 1) Cities-only autocomplete — restricted to locality/sublocality types
-  const citiesUrl =
-    `https://maps.googleapis.com/maps/api/place/autocomplete/json` +
-    `?input=${encodeURIComponent(input)}` +
-    `&types=(cities)` +
-    `&key=${encodeURIComponent(key)}`;
+  // 1) Cities autocomplete — New Autocomplete API
+  const citiesPromise = fetch("https://places.googleapis.com/v1/places:autocomplete", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": key,
+    },
+    body: JSON.stringify({
+      input,
+      includedPrimaryTypes: ["locality", "sublocality", "administrative_area_level_3"],
+    }),
+    cache: "no-store",
+  }).then((r) => r.json());
 
-  // 2) Golf courses (Places Text Search)
-  const coursesUrl =
-    `https://maps.googleapis.com/maps/api/place/textsearch/json` +
-    `?query=${encodeURIComponent(input + " golf course")}` +
-    `&type=golf_course` +
-    `&key=${encodeURIComponent(key)}`;
+  // 2) Golf courses — New searchText API with field masking
+  const coursesPromise = fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": key,
+      "X-Goog-FieldMask": COURSE_FIELD_MASK,
+    },
+    body: JSON.stringify({
+      textQuery: `${input} golf course`,
+      includedType: "golf_course",
+      maxResultCount: 5,
+    }),
+    cache: "no-store",
+  }).then((r) => r.json());
 
-  const [citiesRes, coursesRes] = await Promise.all([fetch(citiesUrl), fetch(coursesUrl)]);
-  const citiesData = await citiesRes.json();
-  const coursesData = await coursesRes.json();
+  const [citiesData, coursesData] = await Promise.all([citiesPromise, coursesPromise]);
 
-  // ---- Cities response handling ----
-  if (citiesData.status !== "OK" && citiesData.status !== "ZERO_RESULTS") {
-    return NextResponse.json(
-      {
-        error: "Places autocomplete (cities) error",
-        googleStatus: citiesData.status,
-        googleError: citiesData.error_message ?? null,
-      },
-      { status: 502 }
-    );
-  }
-
-  // ---- Courses response handling ----
-  if (coursesData.status !== "OK" && coursesData.status !== "ZERO_RESULTS") {
-    return NextResponse.json(
-      {
-        error: "Places textsearch (golf_course) error",
-        googleStatus: coursesData.status,
-        googleError: coursesData.error_message ?? null,
-      },
-      { status: 502 }
-    );
-  }
-
-  const cityPreds: Prediction[] = (citiesData.predictions ?? [])
-    .filter((p: any) => {
-      const desc = String(p?.description ?? "");
-      // Only include results that look like real cities
+  // Cities
+  const cityPreds: Prediction[] = (citiesData?.suggestions ?? [])
+    .filter((s: any) => {
+      const desc = String(s?.placePrediction?.text?.text ?? "");
       return looksLikeCity(desc);
     })
     .slice(0, 4)
-    .map((p: any) => ({
+    .map((s: any) => ({
       kind: "city" as Kind,
-      placeId: String(p?.place_id ?? ""),
-      description: String(p?.description ?? ""),
+      placeId: String(s?.placePrediction?.placeId ?? ""),
+      description: String(s?.placePrediction?.text?.text ?? ""),
     }));
 
-  const coursePreds: Prediction[] = (coursesData.results ?? []).slice(0, 5).map((r: any) => ({
+  // Courses
+  const coursePreds: Prediction[] = (coursesData?.places ?? []).slice(0, 5).map((r: any) => ({
     kind: "course" as Kind,
-    placeId: String(r?.place_id ?? ""),
-    description: `${r?.name ?? "Course"}${r?.formatted_address ? ` — ${r.formatted_address}` : ""}`,
-    name: r?.name ?? null,
-    address: r?.formatted_address ?? null,
+    placeId: String(r?.id ?? ""),
+    description: `${r?.displayName?.text ?? "Course"}${
+      r?.formattedAddress ? ` — ${r.formattedAddress}` : ""
+    }`,
+    name: r?.displayName?.text ?? null,
+    address: r?.formattedAddress ?? null,
   }));
 
   // Merge: courses first, then cities — dedupe by placeId

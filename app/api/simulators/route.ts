@@ -1,6 +1,22 @@
 import { NextResponse } from "next/server";
 
-const includeNameRegex = /(simulator|indoor|virtual|golf|trackman|sports bar|golf house|next golf)/i;
+/**
+ * Simulators API - Migrated to Places API (New)
+ * Uses searchNearby with field masking to minimize billing cost.
+ */
+
+const INCLUDE_NAME_REGEX =
+  /(simulator|indoor|virtual|golf|trackman|sports bar|golf house|next golf)/i;
+
+// Only request fields we actually use — Basic tier ($17/1000)
+const FIELD_MASK = [
+  "places.id",
+  "places.displayName",
+  "places.formattedAddress",
+  "places.rating",
+  "places.userRatingCount",
+  "places.currentOpeningHours",
+].join(",");
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -16,47 +32,58 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing GOOGLE_PLACES_API_KEY" }, { status: 500 });
   }
 
-  const url =
-    `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
-    `?location=${encodeURIComponent(`${lat},${lon}`)}` +
-    `&rankby=distance` +
-    `&type=establishment` +
-    `&keyword=${encodeURIComponent("golf simulator indoor golf")}` +
-    `&key=${encodeURIComponent(key)}`;
+  const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": key,
+      "X-Goog-FieldMask": FIELD_MASK,
+    },
+    body: JSON.stringify({
+      // "establishment" doesn't exist in the new API — use broader types
+      includedTypes: ["sports_complex", "sports_club", "entertainment_and_recreation"],
+      maxResultCount: 20,
+      locationRestriction: {
+        circle: {
+          center: {
+            latitude: parseFloat(lat),
+            longitude: parseFloat(lon),
+          },
+          radius: 20000,
+        },
+      },
+      rankPreference: "DISTANCE",
+    }),
+    cache: "no-store",
+  });
 
-  const res = await fetch(url);
   const data = await res.json();
 
-  if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+  if (!res.ok) {
     return NextResponse.json(
-      {
-        error: "Places error",
-        googleStatus: data.status,
-        googleError: data.error_message ?? null,
-      },
+      { error: "Places error", google: data },
       { status: 502 }
     );
   }
 
-  const raw = data.results ?? [];
+  const raw: any[] = Array.isArray(data?.places) ? data.places : [];
 
-  // Keep simulator-ish entries
-  const sims = raw
-    .filter((p: any) => includeNameRegex.test(String(p?.name ?? "")))
+  const simulators = raw
+    .filter((p: any) => INCLUDE_NAME_REGEX.test(String(p?.displayName?.text ?? "")))
     .slice(0, 10)
     .map((p: any) => ({
-      placeId: p.place_id,
-      name: p.name,
+      placeId: p.id,
+      name: p.displayName?.text ?? null,
       rating: p.rating ?? null,
-      userRatingsTotal: p.user_ratings_total ?? null,
-      address: p.vicinity ?? p.formatted_address ?? null,
-      openNow: p.opening_hours?.open_now ?? null,
-      mapsUrl: p.place_id
+      userRatingsTotal: p.userRatingCount ?? null,
+      address: p.formattedAddress ?? null,
+      openNow: p.currentOpeningHours?.openNow ?? null,
+      mapsUrl: p.id
         ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-            p.name
-          )}&query_place_id=${encodeURIComponent(p.place_id)}`
+            p.displayName?.text ?? ""
+          )}&query_place_id=${encodeURIComponent(p.id)}`
         : null,
     }));
 
-  return NextResponse.json({ simulators: sims });
+  return NextResponse.json({ simulators });
 }
