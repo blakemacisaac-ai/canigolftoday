@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { rateLimit, getIp } from "@/lib/rateLimit";
 
 /**
  * Search/Autocomplete API - Migrated to Places API (New)
@@ -42,6 +43,20 @@ function looksLikeCity(description: string): boolean {
 const COURSE_FIELD_MASK = "places.id,places.displayName,places.formattedAddress";
 
 export async function GET(req: Request) {
+  const { allowed, remaining, resetAt } = rateLimit(getIp(req), { limit: 20, windowMs: 60_000 });
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Too many requests — slow down." },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(Math.ceil((resetAt - Date.now()) / 1000)),
+          "X-RateLimit-Remaining": "0",
+        },
+      }
+    );
+  }
+
   const { searchParams } = new URL(req.url);
   const input = (searchParams.get("q") || "").trim();
 

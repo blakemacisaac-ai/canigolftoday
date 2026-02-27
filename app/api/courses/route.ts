@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { rateLimit, getIp } from "@/lib/rateLimit";
 
 /**
  * Courses API - Migrated to Places API (New)
@@ -54,6 +55,20 @@ async function searchNearby(body: object, key: string) {
 }
 
 export async function GET(req: Request) {
+  const { allowed, remaining, resetAt } = rateLimit(getIp(req), { limit: 10, windowMs: 60_000 });
+  if (!allowed) {
+    return NextResponse.json(
+      { error: "Too many requests — slow down." },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(Math.ceil((resetAt - Date.now()) / 1000)),
+          "X-RateLimit-Remaining": "0",
+        },
+      }
+    );
+  }
+
   const { searchParams } = new URL(req.url);
   const lat = searchParams.get("lat");
   const lon = searchParams.get("lon");
