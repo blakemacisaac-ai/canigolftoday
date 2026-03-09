@@ -10,6 +10,7 @@ type Prediction = { kind: "city" | "course"; placeId: string; description: strin
 function verdictStyles(verdict?: string) {
   if (verdict === "GREEN") return { dot: "🟢", pill: "bg-emerald-600", ring: "ring-emerald-200" };
   if (verdict === "YELLOW") return { dot: "🟡", pill: "bg-amber-500", ring: "ring-amber-200" };
+  if (verdict === "NOT_GOLFABLE") return { dot: "⛔", pill: "bg-slate-600", ring: "ring-slate-400" };
   return { dot: "🔴", pill: "bg-rose-600", ring: "ring-rose-200" };
 }
 
@@ -342,6 +343,7 @@ export default function HomePage() {
   const [searching, setSearching] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const suppressAutocomplete = useRef(false);
+  const daysScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Selected day (0..4)
   const [selectedDay, setSelectedDay] = useState<number>(0);
@@ -478,8 +480,9 @@ export default function HomePage() {
   const verdictLabel = useMemo(() => {
     const v = showVerdict;
     if (!v) return null;
-    if (v === "GREEN") return "Green light";
+    if (v === "GREEN") return "Book it";
     if (v === "YELLOW") return "Playable";
+    if (v === "NOT_GOLFABLE") return "Not golfable";
     return "Not golfable";
   }, [showVerdict]);
 
@@ -538,6 +541,13 @@ export default function HomePage() {
     return 0;
   }, [weather]);
 
+  // Current local hour in the destination timezone — used to dim past buckets
+  const nowLocalHour = useMemo(() => {
+    if (selectedDay !== 0) return -1; // only relevant for today
+    const nowUtc = Math.floor(Date.now() / 1000);
+    return new Date((nowUtc + inferredTzOffsetSec) * 1000).getUTCHours();
+  }, [selectedDay, inferredTzOffsetSec]);
+
   const bestWindowText = useMemo(() => {
   const tzOffsetSec = inferredTzOffsetSec;
 
@@ -547,7 +557,7 @@ export default function HomePage() {
     ? (weather?.golf?.verdict ?? weather?.daily?.[0]?.golf?.verdict) 
     : (selectedDaily?.golf?.verdict);
   
-  if (dayVerdict === "RED") {
+  if (dayVerdict === "RED" || dayVerdict === "NOT_GOLFABLE") {
     return null;
   }
 
@@ -566,6 +576,9 @@ export default function HomePage() {
     : (selectedDaily?.blocks ?? null);
   if (rawBlocks && !Array.isArray(rawBlocks) && typeof rawBlocks === "object") rawBlocks = Object.values(rawBlocks);
   const blocks: any[] = Array.isArray(rawBlocks) ? rawBlocks : [];
+
+  // For today: only consider blocks from now onwards
+  const nowUtcSec = isToday ? Math.floor(Date.now() / 1000) : null;
 
   // Sunrise/sunset bounds for TODAY (destination).
   const sunriseDt = isToday && typeof weather?.daylight?.sunrise === "number" ? weather.daylight.sunrise : null;
@@ -632,7 +645,11 @@ export default function HomePage() {
   };
 
   // 1) Try to resolve startDt/endDt from API window.
-  let startDt: number | null = startDtFromApi;
+  //    If it's already in the past (for today), discard it so we recompute.
+  let startDt: number | null =
+    startDtFromApi != null && nowUtcSec != null && startDtFromApi < nowUtcSec - 1800
+      ? null
+      : startDtFromApi;
   if (startDt == null && labelStart && blocks.length > 0) {
     const b = blocks.find((x: any) => typeof x?.dt === "number" && (x?.label === labelStart));
     if (typeof b?.dt === "number") startDt = b.dt;
@@ -646,7 +663,8 @@ export default function HomePage() {
     const pool = blocks
       .filter((b: any) => typeof b?.dt === "number" && typeof b?.score === "number")
       .filter((b: any) => b?.inDaylight !== false)
-      .filter((b: any) => isValidStart(b.dt));
+      .filter((b: any) => isValidStart(b.dt))
+      .filter((b: any) => nowUtcSec == null || b.dt >= nowUtcSec - 1800); // only future blocks (30min grace)
 
     const best = pool.reduce((acc: any, b: any) => (!acc || b.score > acc.score ? b : acc), null);
 
@@ -726,7 +744,7 @@ export default function HomePage() {
     if (typeof b?.score === "number") avg = b.score;
   }
 
-  const avgSuffix = typeof avg === "number" ? ` (avg ${Math.round(avg)}/100)` : "";
+  const avgSuffix = ""; // avg score removed from display — shown prominently above
   const result = `${startStr} – ${endStr}${avgSuffix}`;
   
   return result;
@@ -744,7 +762,7 @@ const shareUrl = useMemo(() => {
 
 
   const carryChange = useMemo(() => {
-    if (showVerdict === "RED") return null;
+    if (showVerdict === "RED" || showVerdict === "NOT_GOLFABLE") return null;
 
     // For today: prefer current temp, fall back to day0 min/max avg
     // For future days: use average of min/max as a better representative temp than just max
@@ -1054,9 +1072,10 @@ return {
 
   const confidenceLine = useMemo(() => {
     const v = showVerdict;
-    if (v === "GREEN") return "Book it with confidence.";
+    if (v === "GREEN") return "Perfect conditions.";
     if (v === "YELLOW") return "Playable if you catch the window.";
     if (v === "RED") return "Courses are likely closed or unpleasant.";
+    if (v === "NOT_GOLFABLE") return "Off-season — courses are likely closed or under snow.";
     return null;
   }, [showVerdict]);
 
@@ -1203,25 +1222,25 @@ return {
     const gap = 80 - showScore;
     
     if (typeof windKph === "number" && windKph >= 20) {
-      return `💨 Wind ${windKph}km/h is pushing you below 80. Otherwise solid day.`;
+      return `💨 Wind ${windKph} km/h is the limiting factor today.`;
     }
 
     if (typeof tempC === "number") {
       if (tempC <= 8) {
-        return `🧊 Temp ${tempC}°C is a bit chilly for green-light status. Otherwise decent.`;
+        return `🧊 Temp ${tempC}°C is keeping it from green — dress warm.`;
       }
       if (tempC >= 30) {
-        return `🌡 Temp ${tempC}°C is keeping it from green. Otherwise playable.`;
+        return `🌡 Heat (${tempC}°C) is the limiting factor today.`;
       }
     }
 
     const cond = typeof conditions === "string" ? conditions.toLowerCase() : "";
     if (cond.includes("cloud") || cond.includes("overcast")) {
-      return `☁️ Cloudy conditions are the main factor. Otherwise a good day.`;
+      return `☁️ Cloud cover is keeping this from green — otherwise solid.`;
     }
 
     if (gap <= 5) {
-      return `Just ${gap} points from green — marginal conditions.`;
+      return `Just ${gap} pts from green — close call.`;
     }
 
     return null;
@@ -1288,7 +1307,7 @@ return {
     setShowAllCourses(false);
 
     const day0Verdict = w?.daily?.[0]?.golf?.verdict ?? w?.golf?.verdict;
-    if (day0Verdict === "RED") {
+    if (day0Verdict === "RED" || day0Verdict === "NOT_GOLFABLE") {
       const sims = await fetch(`/api/simulators?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json());
       setSimulators(sims);
     } else {
@@ -1306,7 +1325,7 @@ return {
     async function maybeLoadSims() {
       if (!coords || !weather?.daily) return;
       const v = weather?.daily?.[selectedDay]?.golf?.verdict;
-      if (v === "RED") {
+      if (v === "RED" || v === "NOT_GOLFABLE") {
         const sims = await fetch(`/api/simulators?lat=${coords.lat}&lon=${coords.lon}`).then((r) =>
           r.json()
         );
@@ -1338,7 +1357,7 @@ return {
 
   useEffect(() => {
     const q = cityQuery.trim();
-    if (q.length < 2) {
+    if (q.length < 3) {
       setPredictions([]);
       return;
     }
@@ -1357,7 +1376,7 @@ return {
       } finally {
         setSearching(false);
       }
-    }, 250);
+    }, 350);
 
     return () => clearTimeout(t);
   }, [cityQuery]);
@@ -1550,7 +1569,7 @@ return {
                   <div className="flex items-start gap-3">
                     <span className="text-lg">🟢</span>
                     <div>
-                      <div className="text-sm font-semibold text-white/90">80–100 · Green light</div>
+                      <div className="text-sm font-semibold text-white/90">80–100 · Book it</div>
                       <div className="text-sm text-white/55">Great conditions. Book it.</div>
                     </div>
                   </div>
@@ -1672,22 +1691,34 @@ return {
                         {selectedDay === 0 ? "Today" : selectedDaily?.dayLabel ?? ""}
                       </div>
                     </div>
+                    {showVerdict === "NOT_GOLFABLE" ? (
+                      <div className="mt-1 text-sm text-white/60">
+                        {showReason ?? "Off-season — courses closed or unplayable"}
+                      </div>
+                    ) : (
                     <div className="mt-1 text-sm text-white/70">
                       Score: <span className="font-semibold text-white">{showScore}</span>/100 —{" "}
                       {showReason}
                     </div>
+                    )}
 
-                    {yellowLimitingFactor && (
+                    {showVerdict !== "NOT_GOLFABLE" && yellowLimitingFactor && (
                       <div className="mt-2 text-sm text-white/60 italic">
                         {yellowLimitingFactor}
                       </div>
                     )}
 
-                    {confidenceLine && (
+                    {showVerdict !== "NOT_GOLFABLE" && confidenceLine && showVerdict !== "YELLOW" && (
                       <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>
                     )}
 
-                    {carryChangeText && (
+                    {showVerdict === "NOT_GOLFABLE" && (
+                      <div className="mt-3 rounded-2xl bg-slate-500/15 border border-slate-500/30 px-4 py-3 text-sm text-slate-200">
+                        ❄️ It's off-season for golf in this region. Check back in late April or May when courses typically open.
+                      </div>
+                    )}
+
+                    {showVerdict !== "NOT_GOLFABLE" && carryChangeText && (
                       <div className="mt-3">
                         <Chip>{carryChangeText} carry vs typical</Chip>
                       </div>
@@ -1701,7 +1732,7 @@ return {
                       </div>
                     )}
 
-                    {showVerdict === "YELLOW" && yellowReasonChips.length > 0 && (
+                    {showVerdict === "YELLOW" && !yellowLimitingFactor && yellowReasonChips.length > 0 && (
                       <div className="mt-3 flex gap-2 overflow-x-auto pb-2 scrollbar-none">
                         {yellowReasonChips.map((c) => (
                           <Chip key={c}>{c}</Chip>
@@ -1709,8 +1740,8 @@ return {
                       </div>
                     )}
 
-                    {/* Frost warning and rain chance - show for all verdicts */}
-                    {(frostWarning || rainChance) && (
+                    {/* Frost warning and rain chance - show for all verdicts except NOT_GOLFABLE */}
+                    {showVerdict !== "NOT_GOLFABLE" && (frostWarning || rainChance) && (
                       <div className="mt-3 flex gap-2 overflow-x-auto pb-2 scrollbar-none">
                         {frostWarning && (
                           <Chip>{frostWarning}</Chip>
@@ -1724,7 +1755,7 @@ return {
                 </div>
 
                 
-{(bestWindowText || sunriseSunsetText) && (
+{showVerdict !== "NOT_GOLFABLE" && (bestWindowText || sunriseSunsetText) && (
   <div className="mt-4 rounded-2xl bg-white/10 px-4 py-3 text-sm">
     {/* Row 1: best window + share */}
     <div className="flex items-center justify-between gap-3">
@@ -1772,6 +1803,7 @@ return {
 )}
 
                 
+                {showVerdict !== "NOT_GOLFABLE" && (
                 <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="text-xs font-semibold text-white/50 uppercase tracking-wider">Tee time</div>
@@ -1798,24 +1830,34 @@ return {
                     <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">How the day plays out</div>
                     <div className="flex gap-2 flex-wrap">
                       {[
-                        { key: "morning", label: "Morning" },
-                        { key: "midday", label: "Midday" },
-                        { key: "late", label: "Late" },
-                      ].map(({ key, label }) => {
+                        { key: "morning", label: "Morning", endHour: 11 },
+                        { key: "midday",  label: "Midday",  endHour: 15 },
+                        { key: "late",    label: "Late",    endHour: 24 },
+                      ].map(({ key, label, endHour }) => {
                         const s = playOut?.segments?.find((x: any) => x.key === key)?.score;
                         const isBest = playOut?.bestBucket === key;
+                        // Dim bucket if we're past its window (today only)
+                        const isPast = selectedDay === 0 && nowLocalHour >= endHour;
                         const rating = isBest ? "Best window" : s == null ? "—" : key === "late" ? (s >= 65 ? "Holds up" : "Falls off") : (s >= 80 ? "Excellent" : s >= 60 ? "Decent" : "Challenging");
                         return (
                           <div
                             key={key}
-                            className={`flex-1 min-w-[90px] rounded-2xl px-3 py-2.5 text-sm text-center border ${
-                              isBest
+                            className={`flex-1 min-w-[90px] rounded-2xl px-3 py-2.5 text-sm text-center border transition-opacity ${
+                              isPast
+                                ? "bg-white/3 border-white/5 opacity-40"
+                                : isBest
                                 ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
                                 : "bg-white/5 border-white/10 text-white/70"
                             }`}
                           >
-                            <div className="text-xs font-semibold text-white/50 mb-0.5">{label}</div>
-                            <div className={`text-sm font-semibold ${isBest ? "text-emerald-300" : "text-white/85"}`}>{rating}</div>
+                            <div className={`text-xs font-semibold mb-0.5 ${isPast ? "text-white/30" : "text-white/50"}`}>
+                              {label}{isPast ? " · done" : ""}
+                            </div>
+                            <div className={`text-sm font-semibold ${
+                              isPast ? "line-through text-white/25" : isBest ? "text-emerald-300" : "text-white/85"
+                            }`}>
+                              {rating}
+                            </div>
                           </div>
                         );
                       })}
@@ -1879,29 +1921,31 @@ return {
                     </div>
                   )}
                 </div>
+                )} {/* end NOT_GOLFABLE gate */}
 
                 {Array.isArray(weather?.daily) && weather.daily.length > 0 && (
                   <div className="mt-5">
-                    <div className="text-xs font-semibold text-white/50 uppercase tracking-wider">Next 5 days</div>
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-3">Next 5 days</div>
+                    <div className="relative group/days">
+                      {/* Left arrow - desktop only */}
+                      <button
+                        className="hidden md:flex absolute -left-3 top-1/2 -translate-y-1/2 z-10 h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/10 text-white/60 hover:bg-white/20 hover:text-white transition opacity-0 group-hover/days:opacity-100"
+                        onClick={() => daysScrollRef.current?.scrollBy({ left: -176, behavior: "smooth" })}
+                      >
+                        ‹
+                      </button>
+                      <div ref={daysScrollRef} className="flex gap-2 overflow-x-auto -mx-1 px-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
                       {weather.daily.slice(0, 5).map((d: any, idx: number) => {
                         const v = d?.golf?.verdict;
-                        const dot = v === "GREEN" ? "🟢" : v === "YELLOW" ? "🟡" : "🔴";
+                        const dot = v === "GREEN" ? "🟢" : v === "YELLOW" ? "🟡" : v === "NOT_GOLFABLE" ? "⛔" : "🔴";
                         const active = idx === selectedDay;
-
-                        const dayGreens = d?.ground?.greensSpeed?.label
-                          ? cleanGroundLabel(d.ground.greensSpeed.label)
-                          : null;
-                        const dayRoll = d?.ground?.fairwayRollout?.label
-                          ? cleanGroundLabel(d.ground.fairwayRollout.label)
-                          : null;
 
                         return (
                           <button
                             key={d.dateKey || idx}
                             onClick={() => setSelectedDay(idx)}
                             className={[
-                              "rounded-2xl border px-4 py-3 text-left text-sm transition flex-shrink-0 min-w-[140px] md:min-w-0",
+                              "flex-shrink-0 w-40 rounded-2xl border px-3 py-3 text-left text-sm transition",
                               active
                                 ? "border-white/30 bg-white/10"
                                 : "border-white/10 bg-white/5 hover:bg-white/10",
@@ -1911,19 +1955,28 @@ return {
                               <span>{dot}</span>
                               <span className="font-semibold">{idx === 0 ? "Today" : d.dayLabel}</span>
                             </div>
-                            <div className="mt-1 text-xs text-white/65">
-                              {d.maxTemp ?? "—"}° / {d.minTemp ?? "—"}° · wind{" "}
-                              {d.windMax ?? "—"}k
-                              <span className="text-white/50"> (gust {d.gustMax ?? "—"}k)</span>
+                            <div className="mt-1.5 text-xs text-white/65">
+                              {d.maxTemp ?? "—"}° / {d.minTemp ?? "—"}°
+                            </div>
+                            <div className="mt-0.5 text-xs text-white/50">
+                              Wind {d.windMax ?? "—"}k
                             </div>
                             {d.pop != null && (
-                              <div className="mt-1 text-xs text-white/50">
+                              <div className="mt-0.5 text-xs text-white/45">
                                 🌧 {d.pop}% · 💧 {d.humidity ?? "—"}%
                               </div>
                             )}
                           </button>
                         );
                       })}
+                      </div>
+                      {/* Right arrow - desktop only */}
+                      <button
+                        className="hidden md:flex absolute -right-3 top-1/2 -translate-y-1/2 z-10 h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/10 text-white/60 hover:bg-white/20 hover:text-white transition opacity-0 group-hover/days:opacity-100"
+                        onClick={() => daysScrollRef.current?.scrollBy({ left: 176, behavior: "smooth" })}
+                      >
+                        ›
+                      </button>
                     </div>
                   </div>
                 )}
@@ -2067,7 +2120,7 @@ return {
               </div>
 
               <div className="text-sm text-white/60">
-                {showVerdict === "RED" ? "Likely closed (try sims)" : "Tap for directions"}
+                {showVerdict === "RED" || showVerdict === "NOT_GOLFABLE" ? "Likely closed (try sims)" : "Tap for directions"}
               </div>
             </div>
 
@@ -2104,11 +2157,11 @@ return {
           </section>
         )}
 
-        {showVerdict === "RED" && showSims.length > 0 && (
+        {(showVerdict === "RED" || showVerdict === "NOT_GOLFABLE") && showSims.length > 0 && (
           <section className="mt-8">
             <div className="flex items-end justify-between gap-6">
               <h2 className="text-xl font-semibold">Indoor golf / simulators</h2>
-              <div className="text-sm text-white/60">Because it’s a red day outside.</div>
+              <div className="text-sm text-white/60">{showVerdict === "NOT_GOLFABLE" ? "Off-season? Try a sim." : "Because it’s a red day outside."}</div>
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">

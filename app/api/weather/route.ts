@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { golfabilityScore } from "@/lib/golfability";
 
-type GolfVerdict = "GREEN" | "YELLOW" | "RED";
+type GolfVerdict = "GREEN" | "YELLOW" | "RED" | "NOT_GOLFABLE";
 
 type GolfScore = {
   score: number;
@@ -475,7 +475,28 @@ export async function GET(req: Request) {
         ? Math.round(scoreBlocks.reduce((sum, b) => sum + (b.golf?.score ?? 0), 0) / scoreBlocks.length)
         : 0;
 
-    const verdict: GolfVerdict = avg >= 80 ? "GREEN" : avg >= 55 ? "YELLOW" : "RED";
+    // Use the representative block to run a season-aware golfabilityScore call
+    // so NOT_GOLFABLE fires correctly for off-season days.
+    const repBlock = scoreBlocks[Math.floor(scoreBlocks.length / 2)] ?? scoreBlocks[0] ?? rep;
+    const dayGolfResult = repBlock
+      ? golfabilityScore({
+          tempC: repBlock.temp,
+          feelsLikeC: repBlock.feels,
+          windKph: repBlock.windKph,
+          gustKph: repBlock.gustKph,
+          pop: (repBlock.pop ?? 0) / 100,
+          precipMm: repBlock.precipMm,
+          hasAlert: false,
+          conditions: repBlock.conditions,
+          lat: Number(lat),
+          month: nowMonth,
+        })
+      : null;
+
+    const verdict: GolfVerdict =
+      dayGolfResult?.verdict === "NOT_GOLFABLE"
+        ? "NOT_GOLFABLE"
+        : avg >= 80 ? "GREEN" : avg >= 55 ? "YELLOW" : "RED";
 
     // Best window for THIS day: 3-hour block between 6am and 6pm.
     const teeBlocks = scoreBlocks.filter((b) => isInTeeWindow(b.dt));
@@ -523,16 +544,18 @@ export async function GET(req: Request) {
       conditions,
       ground: dayGround,
       golf: {
-        score: avg,
+        score: verdict === "NOT_GOLFABLE" ? 0 : avg,
         verdict,
         reason:
-          verdict === "GREEN"
-            ? "Great golf day"
-            : verdict === "YELLOW"
-              ? "Playable, not perfect"
-              : "Not golfable",
+          verdict === "NOT_GOLFABLE"
+            ? (dayGolfResult?.reason ?? "Off-season — courses closed or unplayable")
+            : verdict === "GREEN"
+              ? "Great golf day"
+              : verdict === "YELLOW"
+                ? "Playable, not perfect"
+                : "Not golfable",
       },
-      bestWindow: verdict === "RED" ? null : dayBestWindow,
+      bestWindow: (verdict === "RED" || verdict === "NOT_GOLFABLE") ? null : dayBestWindow,
 
       // blocks for tee-time scoring + reason chips
       blocks: dayBlocks.map((b) => ({
@@ -552,6 +575,21 @@ export async function GET(req: Request) {
     };
   });
 
+  // Top-level season-aware golf verdict for today (authoritative).
+  // This ensures NOT_GOLFABLE fires correctly based on current conditions + month/lat.
+  const todaySeasonGolf = golfabilityScore({
+    tempC: Math.round(current.main.temp),
+    feelsLikeC: Math.round(current.main.feels_like),
+    windKph: Math.round(msToKph(current.wind?.speed ?? 0)),
+    gustKph: Math.round(msToKph(current.wind?.gust ?? 0)),
+    pop: (current.rain?.["1h"] ?? 0) > 0 ? 0.7 : 0.1,
+    precipMm: current.rain?.["1h"] ?? 0,
+    hasAlert: false,
+    conditions: current.weather?.[0]?.main ?? null,
+    lat: Number(lat),
+    month: nowMonth,
+  });
+
   return NextResponse.json({
     current: {
       temp: Math.round(current.main.temp),
@@ -564,7 +602,10 @@ export async function GET(req: Request) {
       uvIndex: currentUV ?? dailyUVMap[dayKeys[0]] ?? null,
     },
 
-    golf: bestTodayBlock?.golf ?? null,
+    // Use season-aware result; fall back to best block if season allows
+    golf: todaySeasonGolf.verdict === "NOT_GOLFABLE"
+      ? todaySeasonGolf
+      : (bestTodayBlock?.golf ?? todaySeasonGolf),
 
     bestTime: {
       bestBlock: bestTodayBlock,

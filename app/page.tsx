@@ -10,6 +10,7 @@ type Prediction = { kind: "city" | "course"; placeId: string; description: strin
 function verdictStyles(verdict?: string) {
   if (verdict === "GREEN") return { dot: "🟢", pill: "bg-emerald-600", ring: "ring-emerald-200" };
   if (verdict === "YELLOW") return { dot: "🟡", pill: "bg-amber-500", ring: "ring-amber-200" };
+  if (verdict === "NOT_GOLFABLE") return { dot: "⛔", pill: "bg-slate-600", ring: "ring-slate-400" };
   return { dot: "🔴", pill: "bg-rose-600", ring: "ring-rose-200" };
 }
 
@@ -481,6 +482,7 @@ export default function HomePage() {
     if (!v) return null;
     if (v === "GREEN") return "Book it";
     if (v === "YELLOW") return "Playable";
+    if (v === "NOT_GOLFABLE") return "Not golfable";
     return "Not golfable";
   }, [showVerdict]);
 
@@ -555,7 +557,7 @@ export default function HomePage() {
     ? (weather?.golf?.verdict ?? weather?.daily?.[0]?.golf?.verdict) 
     : (selectedDaily?.golf?.verdict);
   
-  if (dayVerdict === "RED") {
+  if (dayVerdict === "RED" || dayVerdict === "NOT_GOLFABLE") {
     return null;
   }
 
@@ -760,7 +762,7 @@ const shareUrl = useMemo(() => {
 
 
   const carryChange = useMemo(() => {
-    if (showVerdict === "RED") return null;
+    if (showVerdict === "RED" || showVerdict === "NOT_GOLFABLE") return null;
 
     // For today: prefer current temp, fall back to day0 min/max avg
     // For future days: use average of min/max as a better representative temp than just max
@@ -1073,6 +1075,7 @@ return {
     if (v === "GREEN") return "Perfect conditions.";
     if (v === "YELLOW") return "Playable if you catch the window.";
     if (v === "RED") return "Courses are likely closed or unpleasant.";
+    if (v === "NOT_GOLFABLE") return "Off-season — courses are likely closed or under snow.";
     return null;
   }, [showVerdict]);
 
@@ -1304,7 +1307,7 @@ return {
     setShowAllCourses(false);
 
     const day0Verdict = w?.daily?.[0]?.golf?.verdict ?? w?.golf?.verdict;
-    if (day0Verdict === "RED") {
+    if (day0Verdict === "RED" || day0Verdict === "NOT_GOLFABLE") {
       const sims = await fetch(`/api/simulators?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json());
       setSimulators(sims);
     } else {
@@ -1322,7 +1325,7 @@ return {
     async function maybeLoadSims() {
       if (!coords || !weather?.daily) return;
       const v = weather?.daily?.[selectedDay]?.golf?.verdict;
-      if (v === "RED") {
+      if (v === "RED" || v === "NOT_GOLFABLE") {
         const sims = await fetch(`/api/simulators?lat=${coords.lat}&lon=${coords.lon}`).then((r) =>
           r.json()
         );
@@ -1584,6 +1587,13 @@ return {
                       <div className="text-sm text-white/55">Probably not worth it. Check the next few days.</div>
                     </div>
                   </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-lg">⛔</span>
+                    <div>
+                      <div className="text-sm font-semibold text-white/90">Off-season · Not golfable</div>
+                      <div className="text-sm text-white/55">Courses are likely closed or under snow. No score shown.</div>
+                    </div>
+                  </div>
                   <div className="text-sm text-white/40 border-t border-white/10 pt-3">
                     Scores weigh temperature, wind, precipitation, humidity, and daylight. The best window is the
                     highest-scoring 3-hour stretch within golfing hours.
@@ -1688,22 +1698,34 @@ return {
                         {selectedDay === 0 ? "Today" : selectedDaily?.dayLabel ?? ""}
                       </div>
                     </div>
+                    {showVerdict === "NOT_GOLFABLE" ? (
+                      <div className="mt-1 text-sm text-white/60">
+                        {showReason ?? "Off-season — courses closed or unplayable"}
+                      </div>
+                    ) : (
                     <div className="mt-1 text-sm text-white/70">
                       Score: <span className="font-semibold text-white">{showScore}</span>/100 —{" "}
                       {showReason}
                     </div>
+                    )}
 
-                    {yellowLimitingFactor && (
+                    {showVerdict !== "NOT_GOLFABLE" && yellowLimitingFactor && (
                       <div className="mt-2 text-sm text-white/60 italic">
                         {yellowLimitingFactor}
                       </div>
                     )}
 
-                    {confidenceLine && showVerdict !== "YELLOW" && (
+                    {showVerdict !== "NOT_GOLFABLE" && confidenceLine && showVerdict !== "YELLOW" && (
                       <div className="mt-2 text-sm text-white/80">{confidenceLine}</div>
                     )}
 
-                    {carryChangeText && (
+                    {showVerdict === "NOT_GOLFABLE" && (
+                      <div className="mt-3 rounded-2xl bg-slate-500/15 border border-slate-500/30 px-4 py-3 text-sm text-slate-200">
+                        ❄️ It's off-season for golf in this region. Check back in late April or May when courses typically open.
+                      </div>
+                    )}
+
+                    {showVerdict !== "NOT_GOLFABLE" && carryChangeText && (
                       <div className="mt-3">
                         <Chip>{carryChangeText} carry vs typical</Chip>
                       </div>
@@ -1725,8 +1747,8 @@ return {
                       </div>
                     )}
 
-                    {/* Frost warning and rain chance - show for all verdicts */}
-                    {(frostWarning || rainChance) && (
+                    {/* Frost warning and rain chance - show for all verdicts except NOT_GOLFABLE */}
+                    {showVerdict !== "NOT_GOLFABLE" && (frostWarning || rainChance) && (
                       <div className="mt-3 flex gap-2 overflow-x-auto pb-2 scrollbar-none">
                         {frostWarning && (
                           <Chip>{frostWarning}</Chip>
@@ -1740,7 +1762,7 @@ return {
                 </div>
 
                 
-{(bestWindowText || sunriseSunsetText) && (
+{showVerdict !== "NOT_GOLFABLE" && (bestWindowText || sunriseSunsetText) && (
   <div className="mt-4 rounded-2xl bg-white/10 px-4 py-3 text-sm">
     {/* Row 1: best window + share */}
     <div className="flex items-center justify-between gap-3">
@@ -1788,6 +1810,7 @@ return {
 )}
 
                 
+                {showVerdict !== "NOT_GOLFABLE" && (
                 <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="text-xs font-semibold text-white/50 uppercase tracking-wider">Tee time</div>
@@ -1905,6 +1928,7 @@ return {
                     </div>
                   )}
                 </div>
+                )} {/* end NOT_GOLFABLE gate */}
 
                 {Array.isArray(weather?.daily) && weather.daily.length > 0 && (
                   <div className="mt-5">
@@ -1920,7 +1944,7 @@ return {
                       <div ref={daysScrollRef} className="flex gap-2 overflow-x-auto -mx-1 px-1" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
                       {weather.daily.slice(0, 5).map((d: any, idx: number) => {
                         const v = d?.golf?.verdict;
-                        const dot = v === "GREEN" ? "🟢" : v === "YELLOW" ? "🟡" : "🔴";
+                        const dot = v === "GREEN" ? "🟢" : v === "YELLOW" ? "🟡" : v === "NOT_GOLFABLE" ? "⛔" : "🔴";
                         const active = idx === selectedDay;
 
                         return (
@@ -1991,14 +2015,14 @@ return {
                       </span>
                     </div>
 
-                    {weather?.current?.conditions && (
+                    {showVerdict !== "NOT_GOLFABLE" && weather?.current?.conditions && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Conditions</span>
                         <span>{weather.current.conditions}</span>
                       </div>
                     )}
 
-                    {(weather?.current?.uvIndex ?? weather?.daily?.[0]?.uvIndex) != null && (
+                    {showVerdict !== "NOT_GOLFABLE" && (weather?.current?.uvIndex ?? weather?.daily?.[0]?.uvIndex) != null && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">UV Index</span>
                         <span>
@@ -2016,14 +2040,14 @@ return {
                       </div>
                     )}
 
-                    {weather?.current?.humidity != null && (
+                    {showVerdict !== "NOT_GOLFABLE" && weather?.current?.humidity != null && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Humidity</span>
                         <span>{weather.current.humidity}%</span>
                       </div>
                     )}
 
-                    {weather?.daily?.[0]?.pop != null && (
+                    {showVerdict !== "NOT_GOLFABLE" && weather?.daily?.[0]?.pop != null && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Rain chance</span>
                         <span>{weather.daily[0].pop}%</span>
@@ -2046,14 +2070,14 @@ return {
                       </span>
                     </div>
 
-                    {selectedDaily?.conditions && (
+                    {showVerdict !== "NOT_GOLFABLE" && selectedDaily?.conditions && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Conditions</span>
                         <span>{selectedDaily.conditions}</span>
                       </div>
                     )}
 
-                    {selectedDaily?.uvIndex != null && (
+                    {showVerdict !== "NOT_GOLFABLE" && selectedDaily?.uvIndex != null && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">UV Index</span>
                         <span>
@@ -2071,14 +2095,14 @@ return {
                       </div>
                     )}
 
-                    {selectedDaily?.humidity != null && (
+                    {showVerdict !== "NOT_GOLFABLE" && selectedDaily?.humidity != null && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Humidity</span>
                         <span>{selectedDaily.humidity}%</span>
                       </div>
                     )}
 
-                    {selectedDaily?.pop != null && (
+                    {showVerdict !== "NOT_GOLFABLE" && selectedDaily?.pop != null && (
                       <div className="mt-2 flex justify-between gap-6">
                         <span className="text-white/60">Rain chance</span>
                         <span>{selectedDaily.pop}%</span>
@@ -2103,7 +2127,7 @@ return {
               </div>
 
               <div className="text-sm text-white/60">
-                {showVerdict === "RED" ? "Likely closed (try sims)" : "Tap for directions"}
+                {showVerdict === "RED" || showVerdict === "NOT_GOLFABLE" ? "Likely closed (try sims)" : "Tap for directions"}
               </div>
             </div>
 
@@ -2140,11 +2164,11 @@ return {
           </section>
         )}
 
-        {showVerdict === "RED" && showSims.length > 0 && (
+        {(showVerdict === "RED" || showVerdict === "NOT_GOLFABLE") && showSims.length > 0 && (
           <section className="mt-8">
             <div className="flex items-end justify-between gap-6">
               <h2 className="text-xl font-semibold">Indoor golf / simulators</h2>
-              <div className="text-sm text-white/60">Because it’s a red day outside.</div>
+              <div className="text-sm text-white/60">{showVerdict === "NOT_GOLFABLE" ? "Off-season? Try a sim." : "Because it’s a red day outside."}</div>
             </div>
 
             <div className="mt-4 grid gap-3 md:grid-cols-2">

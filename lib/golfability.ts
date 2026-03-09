@@ -1,4 +1,4 @@
-export type GolfVerdict = "GREEN" | "YELLOW" | "RED";
+export type GolfVerdict = "GREEN" | "YELLOW" | "RED" | "NOT_GOLFABLE";
 
 type Season = "WINTER" | "SHOULDER" | "SUMMER";
 
@@ -41,7 +41,35 @@ export function golfabilityScore(opts: {
     return { score: 0, verdict: "RED" as GolfVerdict, reason: "Thunderstorms — hard no" };
   }
 
-  // --- Season detection ---
+  // --- Seasonal hard stop (region-aware) ---
+  // For northern latitudes (Canada, northern US, northern Europe), courses are
+  // typically closed or unplayable Nov–Mar. We check month + lat together.
+  if (month !== null && month !== undefined) {
+    const isNorthernRegion = lat === null || lat === undefined ? true : lat >= 43;
+
+    // Off-season months for northern regions: Nov (10), Dec (11), Jan (0), Feb (1), Mar (2)
+    const offSeasonNorth = new Set([10, 11, 0, 1, 2]);
+
+    if (isNorthernRegion && offSeasonNorth.has(month)) {
+      return {
+        score: 0,
+        verdict: "NOT_GOLFABLE" as GolfVerdict,
+        reason: "Off-season — courses closed or unplayable",
+      };
+    }
+
+    // Mid-latitude penalty: Apr (3) and Oct (9) are marginal — require temp >= 8°C feels-like
+    const marginalMonths = new Set([3, 9]);
+    if (isNorthernRegion && marginalMonths.has(month) && feelsLikeC < 8) {
+      return {
+        score: 0,
+        verdict: "NOT_GOLFABLE" as GolfVerdict,
+        reason: "Too cold for this time of year — courses may not be open",
+      };
+    }
+  }
+
+  // --- Season detection (used for scoring weights below) ---
   const season = inferSeason({ lat, month });
 
   // Tunable thresholds (these are the “Canada reality” knobs)
