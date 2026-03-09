@@ -20,14 +20,14 @@ export default function AboutPage() {
             href="/"
             className="rounded-2xl bg-white/10 px-4 py-2 text-sm font-semibold text-white/90 ring-1 ring-white/10 hover:bg-white/15 transition"
           >
-            ← Back
+            Back
           </Link>
         </div>
 
         <p className="mt-6 text-white/75 leading-relaxed">
           I built this because I kept checking three different weather apps before a round and still
           showing up to a soaked fairway. CanIGolfToday gives you one number — a 0–100 conditions
-          score — and tells you the best 3-hour window to tee off. That's it.
+          score — and tells you the best 3-hour window to tee off. That is it.
         </p>
 
         <section className="mt-8 rounded-2xl bg-white/5 p-6 ring-1 ring-white/10">
@@ -36,7 +36,7 @@ export default function AboutPage() {
             <div className="flex items-start gap-3">
               <span className="mt-0.5 text-lg">🟢</span>
               <div>
-                <div className="text-sm font-semibold text-white/90">80–100 · Green light</div>
+                <div className="text-sm font-semibold text-white/90">80–100 · Book it</div>
                 <div className="text-sm text-white/55">Great conditions. Book it.</div>
               </div>
             </div>
@@ -54,17 +54,25 @@ export default function AboutPage() {
                 <div className="text-sm text-white/55">Probably not worth it. Check the next few days.</div>
               </div>
             </div>
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 text-lg">⛔</span>
+              <div>
+                <div className="text-sm font-semibold text-white/90">Off-season · Not golfable</div>
+                <div className="text-sm text-white/55">Courses are likely closed or under snow. No score shown.</div>
+              </div>
+            </div>
           </div>
           <p className="mt-4 text-sm text-white/40 border-t border-white/10 pt-4">
             Scores weigh temperature, wind, precipitation, humidity, and daylight.
             The best window is the highest-scoring 3-hour stretch within golfing hours.
+            In off-season regions (Nov–Mar for northern latitudes), no score is shown.
           </p>
         </section>
 
         <section className="mt-6 rounded-2xl bg-white/5 p-6 ring-1 ring-white/10">
           <h2 className="text-lg font-semibold">Support the project</h2>
           <p className="mt-2 text-sm text-white/70">
-            CanIGolfToday is free and has no ads. If it's saved you a wasted trip, a coffee goes a
+            CanIGolfToday is free and has no ads. If it has saved you a wasted trip, a coffee goes a
             long way toward keeping the lights on.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -74,7 +82,7 @@ export default function AboutPage() {
               rel="noopener noreferrer"
               className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-black hover:opacity-90 transition"
             >
-              ☕ Buy me a coffee
+              Buy me a coffee
             </a>
             <span className="text-xs text-white/40">via Stripe · opens in new tab</span>
           </div>

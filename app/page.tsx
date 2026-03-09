@@ -1945,6 +1945,8 @@ return {
                       {weather.daily.slice(0, 5).map((d: any, idx: number) => {
                         const v = d?.golf?.verdict;
                         const dot = v === "GREEN" ? "🟢" : v === "YELLOW" ? "🟡" : v === "NOT_GOLFABLE" ? "⛔" : "🔴";
+                        const score = d?.golf?.score;
+                        const showScore = (v === "GREEN" || v === "YELLOW") && score != null;
                         const active = idx === selectedDay;
 
                         return (
@@ -1958,9 +1960,16 @@ return {
                                 : "border-white/10 bg-white/5 hover:bg-white/10",
                             ].join(" ")}
                           >
-                            <div className="flex items-center gap-2">
-                              <span>{dot}</span>
-                              <span className="font-semibold">{idx === 0 ? "Today" : d.dayLabel}</span>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span>{dot}</span>
+                                <span className="font-semibold">{idx === 0 ? "Today" : d.dayLabel}</span>
+                              </div>
+                              {showScore && (
+                                <span className={`text-xs font-semibold tabular-nums ${v === "GREEN" ? "text-emerald-400" : "text-amber-400"}`}>
+                                  {score}
+                                </span>
+                              )}
                             </div>
                             <div className="mt-1.5 text-xs text-white/65">
                               {d.maxTemp ?? "—"}° / {d.minTemp ?? "—"}°
@@ -2116,7 +2125,16 @@ return {
         )}
 
         {/* v1.1: curated “Top picks near you” + expandable full list */}
-        {(topCourses.length > 0 || allCourses.length > 0) && (
+        {showVerdict === "NOT_GOLFABLE" && (topCourses.length > 0 || allCourses.length > 0) && (
+          <section className="mt-8">
+            <h2 className="text-xl font-semibold">Courses near you</h2>
+            <div className="mt-4 rounded-2xl border border-slate-500/30 bg-slate-500/10 p-5 text-sm text-slate-200">
+              ❌ Most courses in this region are closed until late April or May. Check their websites directly for opening dates.
+            </div>
+          </section>
+        )}
+
+        {showVerdict !== "NOT_GOLFABLE" && (topCourses.length > 0 || allCourses.length > 0) && (
           <section className="mt-8">
             <div className="flex items-end justify-between gap-6">
               <div>
@@ -2127,7 +2145,7 @@ return {
               </div>
 
               <div className="text-sm text-white/60">
-                {showVerdict === "RED" || showVerdict === "NOT_GOLFABLE" ? "Likely closed (try sims)" : "Tap for directions"}
+                {showVerdict === "RED" ? "Likely closed (try sims)" : "Tap for directions"}
               </div>
             </div>
 
