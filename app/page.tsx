@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { apiBase } from "@/lib/apiBase";
 
 type Coords = { lat: number; lon: number };
 type Prediction = { kind: "city" | "course"; placeId: string; description: string };
@@ -358,7 +359,7 @@ export default function HomePage() {
   // Animated social proof counter — real visitor count from API
   const [counterVal, setCounterVal] = useState(0);
   useEffect(() => {
-    fetch("/api/visitors", { method: "POST" })
+    fetch(`${apiBase}/api/visitors`, { method: "POST" })
       .then((r) => r.json())
       .then((data) => {
         const target = typeof data.count === "number" ? data.count : 0;
@@ -396,13 +397,13 @@ export default function HomePage() {
 
     (async () => {
       try {
-        const sres = await fetch(`/api/location/suggest?q=${encodeURIComponent(label)}`);
+        const sres = await fetch(`${apiBase}/api/location/suggest?q=${encodeURIComponent(label)}`);
         const sdata = await sres.json();
         const preds = Array.isArray(sdata?.predictions) ? sdata.predictions : [];
         const first = preds[0];
         if (!first?.placeId) return;
 
-        const rres = await fetch(`/api/location/resolve?placeId=${encodeURIComponent(first.placeId)}`);
+        const rres = await fetch(`${apiBase}/api/location/resolve?placeId=${encodeURIComponent(first.placeId)}`);
         const rdata = await rres.json();
         if (rdata?.coords?.lat && rdata?.coords?.lon) {
           setCoords({ lat: rdata.coords.lat, lon: rdata.coords.lon });
@@ -1296,8 +1297,8 @@ return {
     setSelectedDay(0);
 
     const [w, cs] = await Promise.all([
-      fetch(`/api/weather?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json()),
-      fetch(`/api/courses?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json()),
+      fetch(`${apiBase}/api/weather?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json()),
+      fetch(`${apiBase}/api/courses?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json()),
     ]);
 
     setWeather(w);
@@ -1308,7 +1309,7 @@ return {
 
     const day0Verdict = w?.daily?.[0]?.golf?.verdict ?? w?.golf?.verdict;
     if (day0Verdict === "RED" || day0Verdict === "NOT_GOLFABLE") {
-      const sims = await fetch(`/api/simulators?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json());
+      const sims = await fetch(`${apiBase}/api/simulators?lat=${c.lat}&lon=${c.lon}`).then((r) => r.json());
       setSimulators(sims);
     } else {
       setSimulators(null);
@@ -1326,7 +1327,7 @@ return {
       if (!coords || !weather?.daily) return;
       const v = weather?.daily?.[selectedDay]?.golf?.verdict;
       if (v === "RED" || v === "NOT_GOLFABLE") {
-        const sims = await fetch(`/api/simulators?lat=${coords.lat}&lon=${coords.lon}`).then((r) =>
+        const sims = await fetch(`${apiBase}/api/simulators?lat=${coords.lat}&lon=${coords.lon}`).then((r) =>
           r.json()
         );
         setSimulators(sims);
@@ -1368,7 +1369,7 @@ return {
     const t = setTimeout(async () => {
       try {
         setSearching(true);
-        const res = await fetch(`/api/location/suggest?q=${encodeURIComponent(q)}`);
+        const res = await fetch(`${apiBase}/api/location/suggest?q=${encodeURIComponent(q)}`);
         const data = await res.json();
         setPredictions(Array.isArray(data?.predictions) ? data.predictions : []);
       } catch {
@@ -1396,7 +1397,7 @@ return {
       setGeoErr(null);
       setLoading(true);
 
-      const res = await fetch(`/api/location/resolve?placeId=${encodeURIComponent(p.placeId)}`);
+      const res = await fetch(`${apiBase}/api/location/resolve?placeId=${encodeURIComponent(p.placeId)}`);
       const data = await res.json();
 
       if (!res.ok || !Number.isFinite(data?.lat) || !Number.isFinite(data?.lon)) {
@@ -1422,7 +1423,7 @@ return {
       setLoading(true);
       setPredictions([]); // prevent dropdown from showing
 
-      const sres = await fetch(`/api/location/suggest?q=${encodeURIComponent(label)}`);
+      const sres = await fetch(`${apiBase}/api/location/suggest?q=${encodeURIComponent(label)}`);
       const sdata = await sres.json();
       const first = Array.isArray(sdata?.predictions) ? sdata.predictions[0] : null;
 
@@ -1432,7 +1433,7 @@ return {
         return;
       }
 
-      const rres = await fetch(`/api/location/resolve?placeId=${encodeURIComponent(first.placeId)}`);
+      const rres = await fetch(`${apiBase}/api/location/resolve?placeId=${encodeURIComponent(first.placeId)}`);
       const rdata = await rres.json();
 
       if (!rres.ok || !Number.isFinite(rdata?.lat) || !Number.isFinite(rdata?.lon)) {

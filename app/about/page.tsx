@@ -103,6 +103,62 @@ export default function AboutPage() {
           </div>
         </section>
 
+        <section className="mt-6 rounded-2xl bg-white/5 p-6 ring-1 ring-white/10" id="privacy">
+          <h2 className="text-lg font-semibold">Privacy Policy</h2>
+          <p className="mt-1 text-xs text-white/40">Last updated: March 2026</p>
+          <div className="mt-4 space-y-4 text-sm text-white/70 leading-relaxed">
+            <p>
+              CanIGolfToday is committed to protecting your privacy. This policy explains
+              what information we collect and how we use it.
+            </p>
+            <div>
+              <div className="font-semibold text-white/90 mb-1">Location Data</div>
+              <p>
+                When you tap "Use my location", we request your device's GPS coordinates solely to
+                fetch local weather and find nearby golf courses. Your location is sent directly to
+                our weather and mapping APIs to generate your conditions score. We do not store your
+                location on our servers and do not share it with third parties for advertising or
+                any other purpose.
+              </p>
+            </div>
+            <div>
+              <div className="font-semibold text-white/90 mb-1">Data We Collect</div>
+              <p>
+                We collect an anonymized visitor count to understand how many golfers use the app
+                each week. No personal information is associated with this count. We do not collect
+                names, email addresses, or any account information.
+              </p>
+            </div>
+            <div>
+              <div className="font-semibold text-white/90 mb-1">Third-Party Services</div>
+              <p>
+                CanIGolfToday uses OpenWeatherMap (weather data), Google Places API (course search
+                and location resolution), and Upstash Redis (anonymous visitor counting). Each
+                service operates under its own privacy policy.
+              </p>
+            </div>
+            <div>
+              <div className="font-semibold text-white/90 mb-1">Children's Privacy</div>
+              <p>
+                This app is intended for users 18 and older. We do not knowingly collect
+                information from children under 13.
+              </p>
+            </div>
+            <div>
+              <div className="font-semibold text-white/90 mb-1">Contact</div>
+              <p>
+                Questions about this policy? Email us at{" "}
+                <a
+                  href="mailto:blakemacisaac@gmail.com"
+                  className="text-white/80 underline underline-offset-4 hover:text-white transition"
+                >
+                  blakemacisaac@gmail.com
+                </a>
+              </p>
+            </div>
+          </div>
+        </section>
+
         <div className="mt-10 text-center text-xs text-white/35">
           Built by a golfer, for golfers. No fluff — just the forecast.
         </div>
