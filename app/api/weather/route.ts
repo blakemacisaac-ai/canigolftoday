@@ -2,6 +2,16 @@
 import { NextResponse } from "next/server";
 import { golfabilityScore } from "@/lib/golfability";
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
 
 type GolfVerdict = "GREEN" | "YELLOW" | "RED" | "NOT_GOLFABLE";
 
@@ -312,12 +322,12 @@ export async function GET(req: Request) {
   const lon = searchParams.get("lon");
 
   if (!lat || !lon) {
-    return NextResponse.json({ error: "Missing lat/lon" }, { status: 400 });
+    return NextResponse.json({ error: "Missing lat/lon" }, { status: 400, headers: CORS_HEADERS });
   }
 
   const apiKey = process.env.OPENWEATHER_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ error: "Missing API key" }, { status: 500 });
+    return NextResponse.json({ error: "Missing API key" }, { status: 500, headers: CORS_HEADERS });
   }
 
   const weatherUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${apiKey}`;
@@ -328,7 +338,7 @@ export async function GET(req: Request) {
   const forecast = await fcRes.json();
 
   if (!curRes.ok || !fcRes.ok) {
-    return NextResponse.json({ error: "Weather fetch failed" }, { status: 502 });
+    return NextResponse.json({ error: "Weather fetch failed" }, { status: 502, headers: CORS_HEADERS });
   }
 
   // Sunrise/sunset from current conditions (unix seconds)

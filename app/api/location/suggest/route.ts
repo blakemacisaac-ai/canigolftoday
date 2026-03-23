@@ -1,18 +1,13 @@
-
 import { NextResponse } from "next/server";
 import { rateLimit, getIp } from "@/lib/rateLimit";
 
-/**
- * Search/Autocomplete API - Migrated to Places API (New)
- * Cities: uses Autocomplete v1 (new)
- * Courses: uses searchText v1 (new) with field masking
- *
- * Cost tip: debounce this on the frontend (300-500ms) to avoid
- * firing on every keystroke — each call hits 2 APIs simultaneously.
- */
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
 
 type Kind = "city" | "course";
-
 type Prediction = {
   kind: Kind;
   placeId: string;
@@ -40,8 +35,11 @@ function looksLikeCity(description: string): boolean {
   return true;
 }
 
-// Only request fields we use — Basic tier pricing
 const COURSE_FIELD_MASK = "places.id,places.displayName,places.formattedAddress";
+
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
 
 export async function GET(req: Request) {
   const { allowed, remaining, resetAt } = rateLimit(getIp(req), { limit: 20, windowMs: 60_000 });
@@ -51,6 +49,7 @@ export async function GET(req: Request) {
       {
         status: 429,
         headers: {
+          ...CORS_HEADERS,
           "Retry-After": String(Math.ceil((resetAt - Date.now()) / 1000)),
           "X-RateLimit-Remaining": "0",
         },
@@ -62,21 +61,17 @@ export async function GET(req: Request) {
   const input = (searchParams.get("q") || "").trim();
 
   if (!input || input.length < 2) {
-    return NextResponse.json({ predictions: [] as Prediction[] });
+    return NextResponse.json({ predictions: [] as Prediction[] }, { headers: CORS_HEADERS });
   }
 
   const key = process.env.GOOGLE_PLACES_API_KEY;
   if (!key) {
-    return NextResponse.json({ error: "Missing GOOGLE_PLACES_API_KEY" }, { status: 500 });
+    return NextResponse.json({ error: "Missing GOOGLE_PLACES_API_KEY" }, { status: 500, headers: CORS_HEADERS });
   }
 
-  // 1) Cities autocomplete — New Autocomplete API
   const citiesPromise = fetch("https://places.googleapis.com/v1/places:autocomplete", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": key,
-    },
+    headers: { "Content-Type": "application/json", "X-Goog-Api-Key": key },
     body: JSON.stringify({
       input,
       includedPrimaryTypes: ["locality", "sublocality", "administrative_area_level_3"],
@@ -84,7 +79,6 @@ export async function GET(req: Request) {
     cache: "no-store",
   }).then((r) => r.json());
 
-  // 2) Golf courses — New searchText API with field masking
   const coursesPromise = fetch("https://places.googleapis.com/v1/places:searchText", {
     method: "POST",
     headers: {
@@ -102,12 +96,8 @@ export async function GET(req: Request) {
 
   const [citiesData, coursesData] = await Promise.all([citiesPromise, coursesPromise]);
 
-  // Cities
   const cityPreds: Prediction[] = (citiesData?.suggestions ?? [])
-    .filter((s: any) => {
-      const desc = String(s?.placePrediction?.text?.text ?? "");
-      return looksLikeCity(desc);
-    })
+    .filter((s: any) => looksLikeCity(String(s?.placePrediction?.text?.text ?? "")))
     .slice(0, 4)
     .map((s: any) => ({
       kind: "city" as Kind,
@@ -115,18 +105,14 @@ export async function GET(req: Request) {
       description: String(s?.placePrediction?.text?.text ?? ""),
     }));
 
-  // Courses
   const coursePreds: Prediction[] = (coursesData?.places ?? []).slice(0, 5).map((r: any) => ({
     kind: "course" as Kind,
     placeId: String(r?.id ?? ""),
-    description: `${r?.displayName?.text ?? "Course"}${
-      r?.formattedAddress ? ` — ${r.formattedAddress}` : ""
-    }`,
+    description: `${r?.displayName?.text ?? "Course"}${r?.formattedAddress ? ` — ${r.formattedAddress}` : ""}`,
     name: r?.displayName?.text ?? null,
     address: r?.formattedAddress ?? null,
   }));
 
-  // Merge: courses first, then cities — dedupe by placeId
   const seen = new Set<string>();
   const merged = [...coursePreds, ...cityPreds].filter((p) => {
     if (!p.placeId || !p.description) return false;
@@ -135,5 +121,5 @@ export async function GET(req: Request) {
     return true;
   });
 
-  return NextResponse.json({ predictions: merged.slice(0, 8) });
+  return NextResponse.json({ predictions: merged.slice(0, 8) }, { headers: CORS_HEADERS });
 }
