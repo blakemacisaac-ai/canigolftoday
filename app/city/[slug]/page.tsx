@@ -10,6 +10,23 @@ function slugToName(slug: string): string {
     .join(" ");
 }
 
+export function generateStaticParams() {
+  return [
+    { slug: "scottsdale" },
+    { slug: "myrtle-beach" },
+    { slug: "pebble-beach" },
+    { slug: "st-andrews" },
+    { slug: "augusta" },
+    { slug: "bandon" },
+    { slug: "toronto" },
+    { slug: "cabot-cliffs" },
+    { slug: "pinehurst" },
+    { slug: "palm-springs" },
+    { slug: "whistling-straits" },
+    { slug: "tpc-sawgrass" },
+  ];
+}
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   const name = slugToName(slug);

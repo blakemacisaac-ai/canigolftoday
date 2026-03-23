@@ -1,9 +1,21 @@
-import type { NextConfig } from "next";
+const isCapacitorBuild = process.env.CAPACITOR_BUILD === "true";
 
-const nextConfig: NextConfig = {
-  ...(process.env.CAPACITOR_BUILD === "true" ? { output: "export" } : {}),
+const nextConfig = {
+  ...(isCapacitorBuild ? { output: "export" } : {}),
   images: {
     unoptimized: true,
+  },
+  async headers() {
+    return [
+      {
+        source: "/api/:path*",
+        headers: [
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Access-Control-Allow-Methods", value: "GET, POST, OPTIONS" },
+          { key: "Access-Control-Allow-Headers", value: "Content-Type" },
+        ],
+      },
+    ];
   },
 };
 

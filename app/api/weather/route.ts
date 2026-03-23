@@ -1,5 +1,7 @@
+
 import { NextResponse } from "next/server";
 import { golfabilityScore } from "@/lib/golfability";
+
 
 type GolfVerdict = "GREEN" | "YELLOW" | "RED" | "NOT_GOLFABLE";
 

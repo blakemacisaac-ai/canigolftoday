@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">CanIGolfToday</string>
+    <string name="title_activity_main">CanIGolfToday</string>
+    <string name="package_name">com.canigolftoday.app</string>
+    <string name="custom_url_scheme">com.canigolftoday.app</string>
+</resources>
